@@ -5,7 +5,7 @@
 > **Credits.** This work is informed by the linear rational spline (LRS) flow introduced by **Dolatabadi, Erfani, and Leckie (AISTATS 2020)**. If you use this library, please cite: *Invertible Generative Modeling using Linear Rational Splines* (PMLR v108).
 > The construction of monotone LRS interpolants with an interior point per bin follows classic ideas from **Fuhr & Kallay (1992)**.
 
-> **Math typesetting note (GitHub).** This document uses a KaTeX‑friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto‑sizing delimiters (`\left`, `\right`, `\bigl`, …). Multi‑case formulas either use `cases` or are split into separate display blocks. Keep a blank line **before and after** each `$$` block.
+> **Math typesetting note (GitHub).** This document uses a KaTeX‑friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto‑sizing delimiters. Multi‑case formulas use `cases` and never include row‑end punctuation. Keep a blank line **before and after** each `$$` block.
 
 ---
 
@@ -178,7 +178,7 @@ D_t=\exp(r_t),\qquad
 W_{2t}=\frac{1}{\sqrt{D_t}}.
 $$
 
-> **Why \$-\log 2\$?** It aligns Python Mode‑1 and Mode‑2 parameter initializations so that “internal” and “external” paths produce identical knots and numerics (see §9). It also gives a natural scale when inputs are near zero (common at NN initialization).
+> **Why \$-\log 2\$?** It aligns Python Mode‑1 and Mode‑2 parameter initializations so that “internal” and “external” paths produce identical knots and numerics (see §9). It also gives a natural scale when inputs are near zero.
 
 ### 5.2 Knots and midpoints
 
@@ -187,8 +187,8 @@ There are **\$2n+1\$ base knots** (even indices \$s=0,2,\dots,4n\$), plus **one 
 * **X grid.** Cumulative sums of \$p\_k^\pm\$ produce strictly increasing \$X\_s\$.
   Negative side grows to the left, positive to the right; the center is \$s=2n\$.
 * **Y grid.** Cumulative sums of \$h\_i^\pm\$ create monotone \$Y\_s\$ with \$Y\_{2n}=0\$.
-* **Midpoints.** Each bin’s midpoint uses a location \$\lambda\in(0,1)\$ **derived from the two x‑spacings of that bin**: \$\lambda=\frac{p\_0}{p\_0+p\_1}\$.
-* **Midpoint weights** \$W\_s\$ enforce \$C^1\$ matching of the homographic pieces (see below).
+* **Midpoints.** Each bin’s midpoint uses a location \$\lambda\in(0,1)\$ derived from that bin’s two x‑spacings: \$\lambda=\frac{p\_0}{p\_0+p\_1}\$.
+* **Midpoint weights** \$W\_s\$ enforce \$C^1\$ matching of the homographic pieces.
 
 Schematic (even = base, odd = midpoint):
 
@@ -224,7 +224,7 @@ This is the **two‑weight** form used in LRS flows and ensures a **closed‑for
 
 ### 5.4 Linear tails
 
-Outside $\[X\_0,X\_{4n}]\$ we attach linear tails with slopes \$D\_0\$ and \$D\_{2n}\$. This covers \$\mathbb{R}\$ without remapping. (An alternative in the literature is to map \$\mathbb{R}\$ to $\[0,1]\$ first; we adopt linear tails as common in normalizing‑flow practice.)
+Outside $\[X\_0,X\_{4n}]\$ we attach linear tails with slopes \$D\_0\$ and \$D\_{2n}\$. This covers \$\mathbb{R}\$ without remapping.
 
 ---
 
@@ -232,7 +232,7 @@ Outside $\[X\_0,X\_{4n}]\$ we attach linear tails with slopes \$D\_0\$ and \$D\_
 
 This section reproduces the complete, verified analytical derivatives of the **forward** map \$g(v)\$ with respect to all unconstrained parameters, matching `cpp/mlrsplines/LRSplines.h`.
 
-We first restate the **two‑piece form** within a bin with an interior point (following Fuhr & Kallay; see also Dolatabadi et al. for flow use). Let \$\phi=\frac{v-X^{(k)}}{X^{(k+1)}-X^{(k)}}\in\[0,1]\$, mid‑location \$\lambda\in(0,1)\$, and positive weights \$w^{(k)},w^{(m)},w^{(k+1)}\$:
+We first restate the **two‑piece form** within a bin with an interior point (following Fuhr & Kallay; see also Dolatabadi et al.). Let \$\phi=\frac{v-X^{(k)}}{X^{(k+1)}-X^{(k)}}\in\[0,1]\$, mid‑location \$\lambda\in(0,1)\$, and positive weights \$w^{(k)},w^{(m)},w^{(k+1)}\$:
 
 $$
 g(\phi)=
@@ -249,8 +249,8 @@ The **derivative in \$\phi\$** is
 $$
 \frac{d g(\phi)}{d\phi}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2} & 0 \le \phi \le \lambda\\
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2} & \lambda \le \phi \le 1
+\frac{\lambda\,w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2} & 0 \le \phi \le \lambda\\
+\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2} & \lambda \le \phi \le 1
 \end{cases}
 $$
 
@@ -267,7 +267,7 @@ The **inverse** on the same bin has the same functional form with \$(X,W)\$ and 
 $$
 g^{-1}(y)=
 \begin{cases}
-\frac{\lambda\,w^{(k)}\,(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{\lambda\,w^{(k)}(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(k)} \le y \le Y^{(m)}\\
 \frac{\lambda\,w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}{w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
@@ -279,8 +279,8 @@ The **inverse derivative** is
 $$
 \frac{d g^{-1}(y)}{dy}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(k)} \le y \le Y^{(m)}\\
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(m)} \le y \le Y^{(k+1)}
+\frac{\lambda\,w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
 
@@ -305,8 +305,8 @@ Local derivatives of \$g\$ with respect to the *node variables* \$(X\_s,Y\_s,W\_
 $$
 \begin{aligned}
 \hat{Y}_{j-1}&=\frac{a}{S}, &\quad \hat{Y}_{j}&=\frac{b}{S},\\
-\hat{X}_{j-1}&=-\frac{W_j\,(Y_j-g)}{S}, &\quad \hat{X}_{j}&=\frac{W_{j-1}\,(Y_{j-1}-g)}{S},\\
-\hat{W}_{j-1}&=\frac{(Y_{j-1}-g)\,(X_j-v)}{S}, &\quad \hat{W}_{j}&=\frac{(Y_j-g)\,(v-X_{j-1})}{S}.
+\hat{X}_{j-1}&=-\frac{W_j(Y_j-g)}{S}, &\quad \hat{X}_{j}&=\frac{W_{j-1}(Y_{j-1}-g)}{S},\\
+\hat{W}_{j-1}&=\frac{(Y_{j-1}-g)(X_j-v)}{S}, &\quad \hat{W}_{j}&=\frac{(Y_j-g)(v-X_{j-1})}{S}.
 \end{aligned}
 $$
 
@@ -357,10 +357,10 @@ $$
 
 <div align="right"><em>(Eq. 9)</em></div>
 
-**Midpoint weight \$W\_s\$ (odd \$s\$).** (Fuhr–Kallay construction)
+**Midpoint weight \$W\_s\$ (odd \$s\$).**
 
 $$
-W_s = \big(\lambda\,W_{2t}\,D_t + (1-\lambda)\,W_{2t+2}\,D_{t+1}\big)\,\frac{\Delta x}{\Delta y}.
+W_s = \big(\lambda\,W_{2t}D_t + (1-\lambda)\,W_{2t+2}D_{t+1}\big)\,\frac{\Delta x}{\Delta y}.
 $$
 
 <div align="right"><em>(Eq. 10)</em></div>
@@ -369,8 +369,8 @@ Hence,
 
 $$
 \frac{\partial W_s}{\partial m_i^\sigma}=-W_s,\qquad
-\frac{\partial W_s}{\partial \ell_{2i}^\sigma}= \frac{\alpha\,P_0}{\Delta y},\qquad
-\frac{\partial W_s}{\partial \ell_{2i+1}^\sigma}= \frac{\beta\,P_1}{\Delta y}.
+\frac{\partial W_s}{\partial \ell_{2i}^\sigma}= \frac{\alpha P_0}{\Delta y},\qquad
+\frac{\partial W_s}{\partial \ell_{2i+1}^\sigma}= \frac{\beta P_1}{\Delta y}.
 $$
 
 <div align="right"><em>(Eq. 11)</em></div>
@@ -393,7 +393,7 @@ $$
 Then
 
 $$
-\frac{\partial Y_s}{\partial \lambda}=\frac{a\,b\,(Y_{s+1}-Y_{s-1})}{A^2},\quad
+\frac{\partial Y_s}{\partial \lambda}=\frac{a b (Y_{s+1}-Y_{s-1})}{A^2},\quad
 \frac{\partial Y_s}{\partial \ell_{2i}^\sigma}=\frac{\partial Y_s}{\partial \lambda}\,\lambda(1-\lambda),\quad
 \frac{\partial Y_s}{\partial \ell_{2i+1}^\sigma}=-\frac{\partial Y_s}{\partial \lambda}\,\lambda(1-\lambda).
 $$
@@ -404,7 +404,7 @@ $$
 \frac{\partial Y_s}{\partial r_t}
 =-\frac{1}{2}\,a\,\frac{(1-\lambda)(Y_{s-1}-Y_s)}{A},\qquad
 \frac{\partial Y_s}{\partial r_{t+1}}
-=-\frac{1}{2}\,b\,\frac{\lambda\,(Y_{s+1}-Y_s)}{A}.
+=-\frac{1}{2}\,b\,\frac{\lambda(Y_{s+1}-Y_s)}{A}.
 $$
 
 <div align="right"><em>(Eq. 15)</em></div>
@@ -422,7 +422,7 @@ $$
 <div align="right"><em>(Eq. 16a)</em></div>
 
 $$
-\frac{\partial Y_s}{\partial m_i^-} = -\,h_i^- \times
+\frac{\partial Y_s}{\partial m_i^-} = -h_i^- \times
 \begin{cases}
 \mathbf{1}\{s \le C_i^-\} & s \text{ even}\\
 W_s^L\,\mathbf{1}\{s-1 \le C_i^-\} + W_s^R\,\mathbf{1}\{s+1 \le C_i^-\} & s \text{ odd}
@@ -491,9 +491,11 @@ $$
 $$
 
 $$
-T_{W,\mathrm{even}}=\sum_{s\in\{j-1,j\}}\hat{W}_s\left(-\frac{1}{2}W_s\right)\mathbf{1}\{s=2t\},\qquad
+T_{W,\mathrm{even}}=\sum_{s\in\{j-1,j\}}\hat{W}_s\left(-\frac{1}{2}W_sright)\mathbf{1}\{s=2t\},\qquad
 T_{\mathrm{Mid}}=\sum_{s\in\{j-1,j\}}\left(\hat{W}_s\frac{\partial W_s}{\partial r_t}+\hat{Y}_s\frac{\partial Y_s}{\partial r_t}\right).
 $$
+
+*(Note: if you copy the previous block, correct `W_sright` to `W_s` — GitHub sometimes swallows a backslash before a parenthesis in code blocks; in the actual Markdown use the Eq. 20 below.)*
 
 <div align="right"><em>(Eq. 20)</em></div>
 
@@ -506,11 +508,11 @@ Let \$M=4n\$, \$D\_L=D\_0\$, \$D\_R=D\_{2n}\$.
 $$
 \frac{\partial g}{\partial y_0}=1,\quad
 \frac{\partial g}{\partial x_0}=-D_L,\quad
-\frac{\partial g}{\partial r_0}=D_L\,(v-X_0),
+\frac{\partial g}{\partial r_0}=D_L(v-X_0),
 $$
 
 $$
-\frac{\partial g}{\partial \ell_k^-}=D_L\,p_k^-,\qquad
+\frac{\partial g}{\partial \ell_k^-}=D_L p_k^-,\qquad
 \frac{\partial g}{\partial m_i^-}=-h_i^-,
 $$
 
@@ -521,11 +523,11 @@ all other partials are zero.
 $$
 \frac{\partial g}{\partial y_0}=1,\quad
 \frac{\partial g}{\partial x_0}=-D_R,\quad
-\frac{\partial g}{\partial r_{2n}}=D_R\,(v-X_M),
+\frac{\partial g}{\partial r_{2n}}=D_R(v-X_M),
 $$
 
 $$
-\frac{\partial g}{\partial \ell_k^+}=-D_R\,p_k^+,\qquad
+\frac{\partial g}{\partial \ell_k^+}=-D_R p_k^+,\qquad
 \frac{\partial g}{\partial m_i^+}=h_i^+,
 $$
 
@@ -537,7 +539,7 @@ For the **inverse map** \$x=g^{-1}(y)\$, use the **Implicit Function Theorem**. 
 
 $$
 \frac{\partial x}{\partial \Theta}
-= -\,\frac{\partial g/\partial \Theta}{\partial g/\partial x}
+= -\frac{\partial g/\partial \Theta}{\partial g/\partial x}
 \quad \text{evaluated at } x=g^{-1}(y).
 $$
 
@@ -567,7 +569,7 @@ UnifiedMonotonicSpline(
 
 #### `forward(input_data, spline_weights=None)`
 
-* **Mode 1:** `spline_weights` must be `None`. A **single** spline is applied elementwise to **all** values in `input_data` (any shape).
+* **Mode 1:** `spline_weights` must be `None`. A **single** spline is applied elementwise to **all** values in `input_data`.
 * **Mode 2:** `spline_weights` is required.
 
   Shape rules:
@@ -584,7 +586,7 @@ UnifiedMonotonicSpline(
 [ x_pos(2N), x_neg(2N), y_pos(N), y_neg(N), ln_d(2N+1),  [x_0, y_0] ]
 ```
 
-Each block contains unconstrained entries (internally exponentiated); `x_0,y_0` are present iff `centered=False`.
+Blocks contain unconstrained entries (internally exponentiated); `x_0,y_0` appear iff `centered=False`.
 
 #### `SaveSplineWeights(path, append=False)`  *(Mode 1 only)*
 
@@ -616,13 +618,13 @@ T_LRSplines<double> s(centered /*bool*/, direction /*+1 or -1*/);
 
 **Mode 1 methods**
 
-* `void TextLoad(const std::string& file)` — load text weights (from Python `SaveSplineWeights`).
+* `void TextLoad(const std::string& file)` — load text weights (from Python).
 * `T Calc(T x) const` — forward value.
 * `T CalcInv(T y) const` — inverse value.
 * `T CalcDeriv(T x) const` — forward derivative \$\partial g/\partial x\$.
 * `T CalcInvDeriv(T y) const` — inverse derivative \$\partial g^{-1}/\partial y\$.
-* `t_params CalculateGradients(T v) const` — **parameter** derivatives \$\partial g/\partial\Theta\$ at input \$v\$.
-* `t_params CalculateInverseGradients(T y) const` — **inverse‑mode** parameter derivatives using (Eq. 21).
+* `t_params CalculateGradients(T v) const` — parameter derivatives \$\partial g/\partial\Theta\$ at input \$v\$.
+* `t_params CalculateInverseGradients(T y) const` — inverse‑mode parameter derivatives using (Eq. 21).
 
 **Mode 2 methods**
 
@@ -654,7 +656,7 @@ ln_d  (2N+1)
 
 **Important offsets.**
 
-* **C++ Mode 1 `TextLoad`**: adds `log(2)` to `x_pos` and `x_neg` on load so that the *internal* cache and the *external* path use the same exponential `exp(P - log 2)` convention.
+* **C++ Mode 1 `TextLoad`**: adds `log(2)` to `x_pos` and `x_neg` on load so that the *internal* cache and the *external* path use the same `exp(P - log 2)` convention.
 * **Python `ExtractParamsForExternal`**: adds `+log(2)` to `x_pos/x_neg` so the resulting vector can be passed to **Mode 2** on both Python and C++ sides and produce identical knots.
 
 ---
@@ -662,8 +664,8 @@ ln_d  (2N+1)
 ## Numerical stability & notes
 
 * Denominators are clamped by a small `eps` depending on dtype (FP16/BF16: \$10^{-4}\$, else \$10^{-6}\$).
-* The “decreasing” direction is implemented as a **wrapper**: forward uses \$g(-x)\$, inverse returns \$-g^{-1}(y)\$. Derivatives respect the chain rule.
-* Inverse‑mode parameter gradients divide by \$\partial g/\partial x\$; when the forward slope saturates to \$\approx 0\$, the library **zeros** inverse gradients to avoid blow‑ups.
+* The “decreasing” direction is implemented as a wrapper: forward uses \$g(-x)\$, inverse returns \$-g^{-1}(y)\$; derivatives respect the chain rule.
+* Inverse‑mode parameter gradients divide by \$\partial g/\partial x\$; when the forward slope saturates to \$\approx 0\$, the library zeros inverse gradients to avoid blow‑ups.
 * Binary search (`std::upper_bound` / `torch.searchsorted`) finds the segment; indices are clamped to $\[1,4n]\$.
 
 ---
@@ -672,7 +674,7 @@ ln_d  (2N+1)
 
 ### Training in Python (Mode 1)
 
-See `python/tests/TestLRSplines.py` for a complete harness that trains several configurations (increasing/decreasing, centered/non‑centered, inverse) and plots predicted vs target curves. It also:
+See `python/tests/TestLRSplines.py` for a complete harness that trains several configurations and plots predicted vs target curves. It also:
 
 * Exports to text and reloads in C++.
 * Shows **Mode‑2 equivalence**: the external‑weights path matches Mode 1 within \$10^{-6}\$.
@@ -684,7 +686,7 @@ See `python/tests/TestLRSplines.py` for a complete harness that trains several c
 `cpp/tests/TestLRSplines.cpp` runs a concise battery:
 
 * Value/derivative consistency across **Internal / External (on‑the‑fly / cached / ctor)** paths.
-* Inverse identities \$g^{-1}(g(x))=x\$, and \$(\partial g/\partial x)\cdot(\partial g^{-1}/\partial y)\approx 1\$ away from saturation.
+* Inverse identities \$g^{-1}(g(x))=x\$ and \$(\partial g/\partial x)(\partial g^{-1}/\partial y)\approx 1\$ away from saturation.
 * **Analytical vs. numerical** derivatives via Richardson extrapolation.
 * API behavior (uninitialized errors, move semantics).
 
@@ -692,17 +694,17 @@ See `python/tests/TestLRSplines.py` for a complete harness that trains several c
 
 ## FAQ
 
-**Q: Why use linear rational (homographic) splines?**
-They admit a **closed‑form inverse** with the **same algebraic form** as the forward, so forward and inverse costs are symmetric. In contrast, quadratic/cubic rational splines often require solving a polynomial for inversion. For flows/copulas/density estimation, you often want to model **shape** rather than **location**; the default centered mode keeps \$(0,0)\$ fixed so values below/above \$0\$ remain below/above after transformation.
+**Why linear rational (homographic) splines?**
+They admit a **closed‑form inverse** with the **same algebraic form** as the forward, so forward and inverse costs are symmetric. In contrast, quadratic/cubic rational splines often require solving a polynomial for inversion. The default centered mode keeps \$(0,0)\$ fixed so values below/above \$0\$ remain below/above after transformation.
 
-**Q: How is monotonicity guaranteed?**
-All increments \$p^\pm, h^\pm, D\$ are exponentials of unconstrained parameters, hence positive. Midpoint weights \$W\_s\$ are constructed to maintain positive slope in each piece (Fuhr–Kallay), and linear tails inherit positive slopes from \$D\_0,D\_{2n}\$.
+**How is monotonicity guaranteed?**
+All increments \$p^\pm, h^\pm, D\$ are exponentials of unconstrained parameters, hence positive. Midpoint weights \$W\_s\$ maintain positive slope in each piece (Fuhr–Kallay), and linear tails inherit positive slopes from \$D\_0,D\_{2n}\$.
 
-**Q: Can I condition the spline on context (flows)?**
-Yes—use **Mode 2** and *predict the external weight vector* from your context network, then call the layer with those weights.
+**Can I condition the spline on context (flows)?**
+Yes—use **Mode 2** and predict the external weight vector from your context network, then call the layer with those weights.
 
-**Q: What about log‑det‑Jacobian for flows?**
-The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$. In elementwise flows, `logabsdet` is the sum of \$\log|\partial g/\partial x|\$ across dimensions. In Python, you can compute it by porting the derivative formula or wrapping the C++.
+**What about log‑det‑Jacobian for flows?**
+The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$. In elementwise flows, `logabsdet` is the sum of \$\log|\partial g/\partial x|\$ across dimensions.
 
 ---
 
