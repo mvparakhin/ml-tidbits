@@ -5,7 +5,7 @@
 > **Credits.** This work is informed by the linear rational spline (LRS) flow introduced by **Dolatabadi, Erfani, and Leckie (AISTATS 2020)**. If you use this library, please cite: *Invertible Generative Modeling using Linear Rational Splines* (PMLR v108).
 > The construction of monotone LRS interpolants with an interior point per bin follows classic ideas from **Fuhr & Kallay (1992)**.
 
-> **Math typesetting note (for GitHub).** This README uses a KaTeX‑friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto‑sizing delimiters (`\left`, `\right`, `\bigl`, …). Multi‑case formulas either use `cases` or are split into separate display blocks. If you copy equations elsewhere, keep a blank line before and after each `$$` block.
+> **Math typesetting note (GitHub).** This document uses a KaTeX‑friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto‑sizing delimiters (`\left`, `\right`, `\bigl`, …). Multi‑case formulas either use `cases` or are split into separate display blocks. Keep a blank line **before and after** each `$$` block.
 
 ---
 
@@ -47,7 +47,7 @@
   * **Mode 1 (internal parameters):** one spline object with trainable parameters.
   * **Mode 2 (external weights):** pass a different parameter vector per sample (batched).
 * **Centered vs non‑centered:** either force the spline to pass through \$(0,0)\$ or learn \$(x\_0,y\_0)\$.
-* **Increasing / decreasing** directions with a single flag (decreasing is just an odd reflection wrapper).
+* **Increasing / decreasing** directions with a single flag (decreasing is an odd‑reflection wrapper).
 * **Linear tails** outside the interior, set by the end‑knot derivatives.
 * **Full analytical derivatives** of the forward mapping w\.r.t. unconstrained parameters (C++), plus **inverse‑mode** gradients via the implicit function theorem.
 * **Reference implementations**
@@ -68,7 +68,7 @@ cpp/                    # C++ header and tests
     TestLRSplines.cpp   # C++ tests (expect data/*.txt)
     data/               # example parameter files
 docs/
-  mlrsplines.md         # full math notes (this README can be docs/README.md as well)
+  mlrsplines.md         # this documentation
 python/
   mlrsplines/
     LRSplines.py        # PyTorch module
@@ -120,7 +120,7 @@ for _ in range(1000):
 # Save parameters (Mode 1 format)
 spline.SaveSplineWeights("spline_tanh.txt")
 
-# Switch to Mode 2: same spline as external weights
+# Mode 2: same spline as external weights
 weights = ExtractParamsForExternal(spline)          # 8N+1 (centered) or 8N+3 (non-centered)
 x_batch = torch.linspace(-2, 2, 10).unsqueeze(-1)
 spline2 = UnifiedMonotonicSpline(n_of_nodes=None, inverse=False,
@@ -166,8 +166,7 @@ We construct a symmetric spline around a center (by default the origin) using **
     (two positive spacings per bin; exponentiated to guarantee positivity).
   * \$n\$ *y‑heights*: \$\mathbf{m}^{\pm}\in\mathbb{R}^{n}\$
     (one positive increment per bin; exponentiated).
-* **Derivatives at base knots**: \$\mathbf{r}\in\mathbb{R}^{2n+1}\$
-  with \$D\_t=\exp(r\_t)>0\$.
+* **Derivatives at base knots**: \$\mathbf{r}\in\mathbb{R}^{2n+1}\$ with \$D\_t=\exp(r\_t)>0\$.
 * **Optional center offsets** (non‑centered only): \$(x\_0,y\_0)\in\mathbb{R}^2\$.
 
 We define
@@ -179,7 +178,7 @@ D_t=\exp(r_t),\qquad
 W_{2t}=\frac{1}{\sqrt{D_t}}.
 $$
 
-> **Why \$-\log 2\$?** It aligns Python Mode‑1 and Mode‑2 parameter initializations so that “internal” and “external” paths produce identical knots and numerics (see §9). It also yields a natural scale when inputs are near zero, which is common at neural‑network initialization.
+> **Why \$-\log 2\$?** It aligns Python Mode‑1 and Mode‑2 parameter initializations so that “internal” and “external” paths produce identical knots and numerics (see §9). It also gives a natural scale when inputs are near zero (common at NN initialization).
 
 ### 5.2 Knots and midpoints
 
@@ -188,11 +187,7 @@ There are **\$2n+1\$ base knots** (even indices \$s=0,2,\dots,4n\$), plus **one 
 * **X grid.** Cumulative sums of \$p\_k^\pm\$ produce strictly increasing \$X\_s\$.
   Negative side grows to the left, positive to the right; the center is \$s=2n\$.
 * **Y grid.** Cumulative sums of \$h\_i^\pm\$ create monotone \$Y\_s\$ with \$Y\_{2n}=0\$.
-* **Midpoints in each bin** (odd \$s\$) use a *location* \$\lambda\in(0,1)\$ derived from the two x‑spacings of that bin:
-
-  $$
-  \lambda=\frac{p_0}{p_0+p_1}.
-  $$
+* **Midpoints.** Each bin’s midpoint uses a location \$\lambda\in(0,1)\$ **derived from the two x‑spacings of that bin**: \$\lambda=\frac{p\_0}{p\_0+p\_1}\$.
 * **Midpoint weights** \$W\_s\$ enforce \$C^1\$ matching of the homographic pieces (see below).
 
 Schematic (even = base, odd = midpoint):
@@ -242,8 +237,8 @@ We first restate the **two‑piece form** within a bin with an interior point (f
 $$
 g(\phi)=
 \begin{cases}
-\frac{w^{(k)}Y^{(k)}(\lambda-\phi)+w^{(m)}Y^{(m)}\phi}{w^{(k)}(\lambda-\phi)+w^{(m)}\phi}, & 0\le \phi \le \lambda,\\[6pt]
-\frac{w^{(m)}Y^{(m)}(1-\phi)+w^{(k+1)}Y^{(k+1)}(\phi-\lambda)}{w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)}, & \lambda \le \phi \le 1.
+\frac{w^{(k)}Y^{(k)}(\lambda-\phi)+w^{(m)}Y^{(m)}\phi}{w^{(k)}(\lambda-\phi)+w^{(m)}\phi} & 0 \le \phi \le \lambda\\
+\frac{w^{(m)}Y^{(m)}(1-\phi)+w^{(k+1)}Y^{(k+1)}(\phi-\lambda)}{w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)} & \lambda \le \phi \le 1
 \end{cases}
 $$
 
@@ -254,8 +249,8 @@ The **derivative in \$\phi\$** is
 $$
 \frac{d g(\phi)}{d\phi}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2}, & 0\le \phi \le \lambda,\\[8pt]
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2}, & \lambda \le \phi \le 1.
+\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2} & 0 \le \phi \le \lambda\\
+\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2} & \lambda \le \phi \le 1
 \end{cases}
 $$
 
@@ -272,8 +267,8 @@ The **inverse** on the same bin has the same functional form with \$(X,W)\$ and 
 $$
 g^{-1}(y)=
 \begin{cases}
-\frac{\lambda\,w^{(k)}\,(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})}, & Y^{(k)}\le y\le Y^{(m)},\\[8pt]
-\frac{\lambda\,w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}{w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}, & Y^{(m)}\le y\le Y^{(k+1)}.
+\frac{\lambda\,w^{(k)}\,(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{\lambda\,w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}{w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
 
@@ -284,8 +279,8 @@ The **inverse derivative** is
 $$
 \frac{d g^{-1}(y)}{dy}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2}, & Y^{(k)}\le y\le Y^{(m)},\\[8pt]
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2}, & Y^{(m)}\le y\le Y^{(k+1)}.
+\frac{\lambda\,w^{(k)}w^{(m)}\,(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}\,(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
 
@@ -365,8 +360,7 @@ $$
 **Midpoint weight \$W\_s\$ (odd \$s\$).** (Fuhr–Kallay construction)
 
 $$
-W_s
-= \big(\lambda\,W_{2t}\,D_t + (1-\lambda)\,W_{2t+2}\,D_{t+1}\big)\,\frac{\Delta x}{\Delta y}.
+W_s = \big(\lambda\,W_{2t}\,D_t + (1-\lambda)\,W_{2t+2}\,D_{t+1}\big)\,\frac{\Delta x}{\Delta y}.
 $$
 
 <div align="right"><em>(Eq. 10)</em></div>
@@ -376,7 +370,7 @@ Hence,
 $$
 \frac{\partial W_s}{\partial m_i^\sigma}=-W_s,\qquad
 \frac{\partial W_s}{\partial \ell_{2i}^\sigma}= \frac{\alpha\,P_0}{\Delta y},\qquad
-\frac{\partial W_s}{\partial \ell_{2i+1}^\sigma}= \frac{\beta\,P_1}{\Delta y},
+\frac{\partial W_s}{\partial \ell_{2i+1}^\sigma}= \frac{\beta\,P_1}{\Delta y}.
 $$
 
 <div align="right"><em>(Eq. 11)</em></div>
@@ -420,8 +414,8 @@ $$
 $$
 \frac{\partial Y_s}{\partial m_i^+} = h_i^+ \times
 \begin{cases}
-\mathbf{1}\{s \ge C_i^+\}, & s \text{ even},\\
-W_s^L\,\mathbf{1}\{s-1 \ge C_i^+\} + W_s^R\,\mathbf{1}\{s+1 \ge C_i^+\}, & s \text{ odd}.
+\mathbf{1}\{s \ge C_i^+\} & s \text{ even}\\
+W_s^L\,\mathbf{1}\{s-1 \ge C_i^+\} + W_s^R\,\mathbf{1}\{s+1 \ge C_i^+\} & s \text{ odd}
 \end{cases}
 $$
 
@@ -430,8 +424,8 @@ $$
 $$
 \frac{\partial Y_s}{\partial m_i^-} = -\,h_i^- \times
 \begin{cases}
-\mathbf{1}\{s \le C_i^-\}, & s \text{ even},\\
-W_s^L\,\mathbf{1}\{s-1 \le C_i^-\} + W_s^R\,\mathbf{1}\{s+1 \le C_i^-\}, & s \text{ odd}.
+\mathbf{1}\{s \le C_i^-\} & s \text{ even}\\
+W_s^L\,\mathbf{1}\{s-1 \le C_i^-\} + W_s^R\,\mathbf{1}\{s+1 \le C_i^-\} & s \text{ odd}
 \end{cases}
 $$
 
@@ -453,15 +447,15 @@ $$
 **X‑spacings \$\ell\_k^\sigma\$.** Two contributions:
 
 $$
-\frac{\partial g}{\partial \ell_k^\sigma} = T_X + T_{\mathrm{Mid}},
+\frac{\partial g}{\partial \ell_k^\sigma} = T_X + T_{\mathrm{Mid}}.
 $$
 
 $$
-T_X(\ell_k^+) = p_k^+\big(\hat{X}_{j-1}\,\mathbf{1}\{j-1\ge 2n+1+k\}+\hat{X}_j\,\mathbf{1}\{j\ge 2n+1+k\}\big),
+T_X(\ell_k^+) = p_k^+\big(\hat{X}_{j-1}\,\mathbf{1}\{j-1\ge 2n+1+k\}+\hat{X}_j\,\mathbf{1}\{j\ge 2n+1+k\}\big).
 $$
 
 $$
-T_X(\ell_k^-) = -p_k^-\big(\hat{X}_{j-1}\,\mathbf{1}\{j-1\le k\}+\hat{X}_j\,\mathbf{1}\{j\le k\}\big),
+T_X(\ell_k^-) = -p_k^-\big(\hat{X}_{j-1}\,\mathbf{1}\{j-1\le k\}+\hat{X}_j\,\mathbf{1}\{j\le k\}\big).
 $$
 
 <div align="right"><em>(Eq. 18)</em></div>
@@ -470,16 +464,16 @@ $$
 T_{\mathrm{Mid}}=\sum_{s\in\{j-1,j\}}\left(\hat{W}_s\frac{\partial W_s}{\partial \ell_k^\sigma} + \hat{Y}_s\frac{\partial Y_s}{\partial \ell_k^\sigma}\right),
 $$
 
-with \$\partial W\_s/\partial\ell\$ and \$\partial Y\_s/\partial\ell\$ from (Eq. 11) and (Eq. 14).
+with \$\partial W\_s/\partial \ell\$ and \$\partial Y\_s/\partial \ell\$ from (Eq. 11) and (Eq. 14).
 
 **Y‑heights \$m\_i^\sigma\$.**
 
 $$
-\frac{\partial g}{\partial m_i^\sigma}= T_Y + T_W,
+\frac{\partial g}{\partial m_i^\sigma}= T_Y + T_W.
 $$
 
 $$
-T_W(m_i^\sigma)=\sum_{s\in\{j-1,j\}}\hat{W}_s(-W_s)\cdot \mathbf{1}\{ s=\text{odd midpoint index of bin } i \text{ on side } \sigma\},
+T_W(m_i^\sigma)=\sum_{s\in\{j-1,j\}}\hat{W}_s(-W_s)\cdot \mathbf{1}\{ s=\text{odd midpoint index of bin } i \text{ on side } \sigma\}.
 $$
 
 <div align="right"><em>(Eq. 19)</em></div>
@@ -493,16 +487,15 @@ with \$\partial Y/\partial m\$ from (Eq. 16a,b).
 **Log‑derivatives \$r\_t\$.**
 
 $$
-\frac{\partial g}{\partial r_t}= T_{W,\mathrm{even}} + T_{\mathrm{Mid}},
+\frac{\partial g}{\partial r_t}= T_{W,\mathrm{even}} + T_{\mathrm{Mid}}.
 $$
 
 $$
 T_{W,\mathrm{even}}=\sum_{s\in\{j-1,j\}}\hat{W}_s\left(-\frac{1}{2}W_s\right)\mathbf{1}\{s=2t\},\qquad
-T_{\mathrm{Mid}}=\sum_{s\in\{j-1,j\}}\left(\hat{W}_s\frac{\partial W_s}{\partial r_t}+\hat{Y}_s\frac{\partial Y_s}{\partial r_t}\right),
+T_{\mathrm{Mid}}=\sum_{s\in\{j-1,j\}}\left(\hat{W}_s\frac{\partial W_s}{\partial r_t}+\hat{Y}_s\frac{\partial Y_s}{\partial r_t}\right).
 $$
 
 <div align="right"><em>(Eq. 20)</em></div>
-with $\partial W_s/\partial r_t$ from (Eq. 12) and $\partial Y_s/\partial r_t$ from (Eq. 15).
 
 ### 6.4 Assembled derivatives (tails)
 
@@ -540,7 +533,7 @@ all other partials are zero.
 
 ### 6.5 Inverse‑mode parameter derivatives
 
-For the **inverse map** \$x=g^{-1}(y)\$, use the **Implicit Function Theorem**. Let \$y=g(x; \Theta)\$, with \$x=g^{-1}(y;\Theta)\$. Then
+For the **inverse map** \$x=g^{-1}(y)\$, use the **Implicit Function Theorem**. Let \$y=g(x;\Theta)\$, with \$x=g^{-1}(y;\Theta)\$. Then
 
 $$
 \frac{\partial x}{\partial \Theta}
@@ -683,7 +676,7 @@ See `python/tests/TestLRSplines.py` for a complete harness that trains several c
 
 * Exports to text and reloads in C++.
 * Shows **Mode‑2 equivalence**: the external‑weights path matches Mode 1 within \$10^{-6}\$.
-* Checks **round‑trip** \$x \stackrel{g}{\mapsto} y \stackrel{g^{-1}}{\mapsto} x\$ to \$10^{-4}\$.
+* Checks **round‑trip** \$x \mapsto y \mapsto x\$ to \$10^{-4}\$.
 * Verifies **gradient flow** to both inputs and external weights in autograd.
 
 ### C++ tests
@@ -725,12 +718,12 @@ The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$
 
 * **Knots & weights.** `CalculateKnots` (C++) and `_CalculateKnots` (Py) implement §5.2–§5.4:
 
-  * base weights \$W\_{2t}=1/\sqrt{D\_t}\$,
-  * mid‑location \$\lambda=\frac{p\_0}{p\_0+p\_1}\$,
-  * midpoint weight \$W\_s\$ from (Eq. 10),
-  * midpoint value \$Y\_s\$ from (Eq. 13),
-  * cumulative \$X,Y\$ with optional center offsets \$x\_0,y\_0\$,
-  * linear tails with slopes \$D\_0,D\_{2n}\$.
+  * base weights \$W\_{2t}=1/\sqrt{D\_t}\$
+  * mid‑location \$\lambda=\frac{p\_0}{p\_0+p\_1}\$
+  * midpoint weight \$W\_s\$ from (Eq. 10)
+  * midpoint value \$Y\_s\$ from (Eq. 13)
+  * cumulative \$X,Y\$ with optional center offsets \$x\_0,y\_0\$
+  * linear tails with slopes \$D\_0,D\_{2n}\$
 * **Forward evaluation.** `ApplySplineUnified` (C++) / `_ApplySpline` (Py) implement the barycentric form (Eq. F) with interval search and tails.
 * **Gradients.** `CalculateGradientsUnified` (C++) implements (Eq. 5)–(Eq. 20).
   `CalculateInverseGradients` applies (Eq. 21).
