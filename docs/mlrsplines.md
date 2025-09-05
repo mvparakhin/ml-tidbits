@@ -415,7 +415,7 @@ $$
 \frac{\partial Y_s}{\partial m_i^+} = h_i^+ \times
 \begin{cases}
 \mathbf{1}\{s \ge C_i^+\} & s \text{ even}\\
-W_s^L \mathbf{1}\{s-1 \ge C_i^+\} + W_s^R \mathbf{1}\{s+1 \ge C_i^+\} & s \text{ odd}
+W_s^L \mathbf{1}\(s-1 \ge C_i^+\) + W_s^R \mathbf{1}\(s+1 \ge C_i^+\) & s \text{ odd}
 \end{cases}
 $$
 
@@ -425,7 +425,7 @@ $$
 \frac{\partial Y_s}{\partial m_i^-} = -h_i^- \times
 \begin{cases}
 \mathbf{1}\{s \le C_i^-\} & s \text{ even}\\
-W_s^L \mathbf{1}\{s-1 \le C_i^-\} + W_s^R \mathbf{1}\{s+1 \le C_i^-\} & s \text{ odd}
+W_s^L \mathbf{1}\(s-1 \le C_i^-\) + W_s^R \mathbf{1}\(s+1 \le C_i^-\) & s \text{ odd}
 \end{cases}
 $$
 
