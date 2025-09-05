@@ -249,8 +249,8 @@ The **derivative in \$\phi\$** is
 $$
 \frac{d g(\phi)}{d\phi}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2} & 0 \le \phi \le \lambda\\
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2} & \lambda \le \phi \le 1
+\frac{\lambda w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(\lambda-\phi)+w^{(m)}\phi\big)^2} & 0 \le \phi \le \lambda\\
+\frac{(1-\lambda) w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(m)}(1-\phi)+w^{(k+1)}(\phi-\lambda)\big)^2} & \lambda \le \phi \le 1
 \end{cases}
 $$
 
@@ -259,7 +259,7 @@ $$
 To obtain \$\frac{d g}{d v}\$ on this bin, divide by \$\delta^{(k)}=X^{(k+1)}-X^{(k)}\$:
 
 $$
-\frac{d g}{d v} = \frac{1}{\delta^{(k)}}\,\frac{d g}{d\phi}.
+\frac{d g}{d v} = \frac{1}{\delta^{(k)}} \frac{d g}{d\phi}.
 $$
 
 The **inverse** on the same bin has the same functional form with \$(X,W)\$ and \$(Y,W)\$ swapped:
@@ -267,8 +267,8 @@ The **inverse** on the same bin has the same functional form with \$(X,W)\$ and 
 $$
 g^{-1}(y)=
 \begin{cases}
-\frac{\lambda\,w^{(k)}(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(k)} \le y \le Y^{(m)}\\
-\frac{\lambda\,w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}{w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(m)} \le y \le Y^{(k+1)}
+\frac{\lambda w^{(k)}(Y^{(k)}-y)}{w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{\lambda w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})}{w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
 
@@ -279,8 +279,8 @@ The **inverse derivative** is
 $$
 \frac{d g^{-1}(y)}{dy}=
 \begin{cases}
-\frac{\lambda\,w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(k)} \le y \le Y^{(m)}\\
-\frac{(1-\lambda)\,w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(m)} \le y \le Y^{(k+1)}
+\frac{\lambda w^{(k)}w^{(m)}(Y^{(m)}-Y^{(k)})}{\big(w^{(k)}(Y^{(k)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(k)} \le y \le Y^{(m)}\\
+\frac{(1-\lambda) w^{(m)}w^{(k+1)}(Y^{(k+1)}-Y^{(m)})}{\big(w^{(k+1)}(Y^{(k+1)}-y)+w^{(m)}(y-Y^{(m)})\big)^2} & Y^{(m)} \le y \le Y^{(k+1)}
 \end{cases}
 $$
 
@@ -343,8 +343,8 @@ $$
 **X grid (even and odd \$s\$).** For any \$k\$:
 
 $$
-\frac{\partial X_s}{\partial \ell_k^+}=p_k^{+}\,\mathbf{1}\{s\ge 2n+1+k\},\qquad
-\frac{\partial X_s}{\partial \ell_k^-}=-p_k^{-}\,\mathbf{1}\{s\le k\}.
+\frac{\partial X_s}{\partial \ell_k^+}=p_k^{+} \mathbf{1}\{s\ge 2n+1+k\},\qquad
+\frac{\partial X_s}{\partial \ell_k^-}=-p_k^{-} \mathbf{1}\{s\le k\}.
 $$
 
 <div align="right"><em>(Eq. 8)</em></div>
@@ -352,7 +352,7 @@ $$
 **W grid (even \$s=2t\$).**
 
 $$
-\frac{\partial W_{2t}}{\partial r_{t'}}=-\frac{1}{2}\,W_{2t}\,\delta_{t t'}.
+\frac{\partial W_{2t}}{\partial r_{t'}}=-\frac{1}{2}W_{2t}\delta_{t t'}.
 $$
 
 <div align="right"><em>(Eq. 9)</em></div>
@@ -360,7 +360,7 @@ $$
 **Midpoint weight \$W\_s\$ (odd \$s\$).**
 
 $$
-W_s = \big(\lambda\,W_{2t}D_t + (1-\lambda)\,W_{2t+2}D_{t+1}\big)\,\frac{\Delta x}{\Delta y}.
+W_s = \big(\lambda W_{2t}D_t + (1-\lambda) W_{2t+2}D_{t+1}\big)\frac{\Delta x}{\Delta y}.
 $$
 
 <div align="right"><em>(Eq. 10)</em></div>
@@ -376,8 +376,8 @@ $$
 <div align="right"><em>(Eq. 11)</em></div>
 
 $$
-\frac{\partial W_s}{\partial r_t}= \frac{1}{2}\frac{\Delta x}{\Delta y}\,\lambda\,\alpha,\qquad
-\frac{\partial W_s}{\partial r_{t+1}}= \frac{1}{2}\frac{\Delta x}{\Delta y}\,(1-\lambda)\,\beta.
+\frac{\partial W_s}{\partial r_t}= \frac{1}{2}\frac{\Delta x}{\Delta y}\lambda\alpha,\qquad
+\frac{\partial W_s}{\partial r_{t+1}}= \frac{1}{2}\frac{\Delta x}{\Delta y}(1-\lambda)\beta.
 $$
 
 <div align="right"><em>(Eq. 12)</em></div>
@@ -385,7 +385,7 @@ $$
 **Midpoint value \$Y\_s\$ (odd \$s\$).** Interpolation weights
 
 $$
-W_s^L=\frac{(1-\lambda)a}{A},\qquad W_s^R=\frac{\lambda b}{A},\qquad Y_s=W_s^L\,Y_{s-1}+W_s^R\,Y_{s+1}.
+W_s^L=\frac{(1-\lambda)a}{A},\qquad W_s^R=\frac{\lambda b}{A},\qquad Y_s=W_s^LY_{s-1}+W_s^RY_{s+1}.
 $$
 
 <div align="right"><em>(Eq. 13)</em></div>
@@ -394,17 +394,17 @@ Then
 
 $$
 \frac{\partial Y_s}{\partial \lambda}=\frac{a b (Y_{s+1}-Y_{s-1})}{A^2},\quad
-\frac{\partial Y_s}{\partial \ell_{2i}^\sigma}=\frac{\partial Y_s}{\partial \lambda}\,\lambda(1-\lambda),\quad
-\frac{\partial Y_s}{\partial \ell_{2i+1}^\sigma}=-\frac{\partial Y_s}{\partial \lambda}\,\lambda(1-\lambda).
+\frac{\partial Y_s}{\partial \ell_{2i}^\sigma}=\frac{\partial Y_s}{\partial \lambda}\lambda(1-\lambda),\quad
+\frac{\partial Y_s}{\partial \ell_{2i+1}^\sigma}=-\frac{\partial Y_s}{\partial \lambda}\lambda(1-\lambda).
 $$
 
 <div align="right"><em>(Eq. 14)</em></div>
 
 $$
 \frac{\partial Y_s}{\partial r_t}
-=-\frac{1}{2}\,a\,\frac{(1-\lambda)(Y_{s-1}-Y_s)}{A},\qquad
+=-\frac{1}{2}a\frac{(1-\lambda)(Y_{s-1}-Y_s)}{A},\qquad
 \frac{\partial Y_s}{\partial r_{t+1}}
-=-\frac{1}{2}\,b\,\frac{\lambda(Y_{s+1}-Y_s)}{A}.
+=-\frac{1}{2}b\frac{\lambda(Y_{s+1}-Y_s)}{A}.
 $$
 
 <div align="right"><em>(Eq. 15)</em></div>
@@ -415,7 +415,7 @@ $$
 \frac{\partial Y_s}{\partial m_i^+} = h_i^+ \times
 \begin{cases}
 \mathbf{1}\{s \ge C_i^+\} & s \text{ even}\\
-W_s^L\,\mathbf{1}\{s-1 \ge C_i^+\} + W_s^R\,\mathbf{1}\{s+1 \ge C_i^+\} & s \text{ odd}
+W_s^L \mathbf{1}\{s-1 \ge C_i^+\} + W_s^R \mathbf{1}\{s+1 \ge C_i^+\} & s \text{ odd}
 \end{cases}
 $$
 
@@ -425,7 +425,7 @@ $$
 \frac{\partial Y_s}{\partial m_i^-} = -h_i^- \times
 \begin{cases}
 \mathbf{1}\{s \le C_i^-\} & s \text{ even}\\
-W_s^L\,\mathbf{1}\{s-1 \le C_i^-\} + W_s^R\,\mathbf{1}\{s+1 \le C_i^-\} & s \text{ odd}
+W_s^L \mathbf{1}\{s-1 \le C_i^-\} + W_s^R \mathbf{1}\{s+1 \le C_i^-\} & s \text{ odd}
 \end{cases}
 $$
 
@@ -491,11 +491,9 @@ $$
 $$
 
 $$
-T_{W,\mathrm{even}}=\sum_{s\in\{j-1,j\}}\hat{W}_s\left(-\frac{1}{2}W_sright)\mathbf{1}\{s=2t\},\qquad
+T_{W,\mathrm{even}}=\sum_{s\in\{j-1,j\}}\hat{W}_s\left(-\frac{1}{2}W_s\right)\mathbf{1}\{s=2t\},\qquad
 T_{\mathrm{Mid}}=\sum_{s\in\{j-1,j\}}\left(\hat{W}_s\frac{\partial W_s}{\partial r_t}+\hat{Y}_s\frac{\partial Y_s}{\partial r_t}\right).
 $$
-
-*(Note: if you copy the previous block, correct `W_sright` to `W_s` — GitHub sometimes swallows a backslash before a parenthesis in code blocks; in the actual Markdown use the Eq. 20 below.)*
 
 <div align="right"><em>(Eq. 20)</em></div>
 
