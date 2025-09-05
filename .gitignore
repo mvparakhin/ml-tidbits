@@ -1,0 +1,7 @@
+.DS_Store
+*.dSYM/
+cpp/tests/TestLRSplines
+build/
+__pycache__/
+*.pyc
+.venv/
