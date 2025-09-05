@@ -1,39 +1,3 @@
-This is a very common frustration when writing detailed technical documentation on GitHub\! You have an excellent and comprehensive `help.md` file.
-
-The rendering issues you are seeing, particularly incorrect spacing in complex formulas, are usually caused by conflicts between GitHub Flavored Markdown (GFM) and LaTeX syntax.
-
-### The Problem: Markdown Interference
-
-While GitHub supports LaTeX rendering (using MathJax), its Markdown processor can sometimes interfere with the math content.
-
-The most common conflict involves the underscore `_`. In LaTeX, `_` is used for subscripts (e.g., $X\_s$). In Markdown, `_text_` means *italics*.
-
-When you use the `$$ ... $$` delimiters for block equations, GitHub sometimes attempts to apply Markdown formatting *before* rendering the LaTeX. If it sees a complex equation with many subscripts, it might misinterpret the underscores, corrupting the LaTeX code and leading to broken rendering or incorrect spacing.
-
-### The Solution: Use Fenced Math Blocks
-
-The most robust way to ensure your formulas render correctly on GitHub is to use a **fenced code block with the language identifier `math`**.
-
-````markdown
-```math
-[Your LaTeX equation here]
-```
-````
-
-This tells the GitHub Markdown processor: "Do not apply standard Markdown formatting inside this block; treat it purely as math code."
-
-### Additional Fixes Applied
-
-I have gone through your `help.md` file and applied the following fixes:
-
-1.  **Replaced all `$$` blocks with ` ```math ` blocks.**
-2.  **Optimized Alignment:** For the multi-column equations in Equation (5), I used the `alignat` environment instead of `aligned`. This provides better control over the spacing between columns on GitHub.
-3.  **Inline Math Consistency:** I ensured all mathematical variables and symbols within your text paragraphs (e.g., $W$, $8N+1$, $\\log(2)$) are wrapped in single dollar signs (`$ ... $`) for consistent formatting. I also changed `eps` to the symbol $\\varepsilon$.
-
-### The Corrected Markdown File
-
-You can copy the content below and paste it into your `help.md` file on GitHub.
-
 ```markdown
 # Monotonic Linear Rational Splines (MLRS)
 
