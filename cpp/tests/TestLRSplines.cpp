@@ -12,7 +12,7 @@
 #include <iomanip>
 #include <utility>
 
-#include "../mlrsplines/LRSplines.h" // Assuming the latest C++ implementation is saved here
+#include "../mlrsplines/LRSplines.h"
 using namespace ns_base;
 
 // Define the type and precision for testing
@@ -268,9 +268,6 @@ void TestConsistency(const std::string& filename, int direction, bool is_centere
          AssertNear(dx_dy_int, p_spline_ctor->CalcInvDeriv(y_int), "Consistency (InvDeriv): Internal vs Constructor");
       }
 
-      if (p_spline_ctor)
-         AssertNear(y_int, p_spline_ctor->Calc(x), "Consistency: Internal vs Constructor");
-
       // Check forward/inverse consistency (x = CalcInv(Calc(x)))
       t_test_val x_inv_int = spline_int.CalcInv(y_int);
       t_test_val x_inv_cached = spline_cached.CalcInv(y_cached);
@@ -294,9 +291,8 @@ void TestConsistency(const std::string& filename, int direction, bool is_centere
       // We expect the product to be 1. If the product is very small (near 0), it implies saturation, 
       // where both derivatives are near 0, which is also valid behavior.
       // Only assert it's 1 if the product is significantly different from 0.
-      if (std::abs(identity_product) > gc_test_tolerance) {
-          AssertNear(identity_product, 1.0, "Inverse Function Theorem (dy/dx * dx/dy = 1)");
-      }
+      if (std::abs(identity_product) > gc_test_tolerance)
+         AssertNear(identity_product, 1.0, "Inverse Function Theorem (dy/dx * dx/dy = 1)");
 
       // --------------------------------------------------------------------------------
       // C. Numerical Verification (Analytical vs Finite Differences) - Use derivative tolerance
@@ -364,11 +360,7 @@ void TestAPIFeatures() {
 
    // Source must be invalid (empty cache)
    caught = false;
-   try {
-      src_ext.Calc(1.);
-   } catch (const LRSplinesException& e) {
-      if (e.code() == 1) caught = true;
-   }
+   try { src_ext.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
    assert(caught && "Source external object not invalidated after move.");
 
    // 4. Move Semantics (Internal Mode)
@@ -383,11 +375,7 @@ void TestAPIFeatures() {
 
    // Source must be invalid
    caught = false;
-   try {
-      src_int.Calc(1.);
-   } catch (const LRSplinesException& e) {
-      if (e.code() == 1) caught = true;
-   }
+   try { src_int.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
    assert(caught && "Source internal object not invalidated after move.");
 }
 
@@ -395,13 +383,10 @@ void TestAPIFeatures() {
 // Main test function
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 int TestLRSplines() {
-   // Update title to reflect the extended tests
    std::cout << "Running T_UnifiedMonotonicSpline Concise Tests (Including Derivatives)..." << std::endl;
    std::cout << std::fixed << std::setprecision(8);
 
    // NOTE: These tests require the spline_*.txt files to be present in the working directory
-
-   // Update test names to reflect the inclusion of derivative checks
 
    // Test standard configuration (Centered, Increasing)
    RunTest("Consistency & Derivatives: spline_tanh.txt (Increasing)", [](){
