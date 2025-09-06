@@ -353,7 +353,7 @@ void TestAPIFeatures() {
 
 
    // 3. Move Semantics (External Mode)
-   auto weights = LoadExternalWeights("spline_tanh.txt");
+   auto weights = LoadExternalWeights("./data/spline_tanh.txt");
    t_spline_external src_ext(weights.data(), weights.size());
    t_test_val y_src = src_ext.Calc(1.);
    t_test_val dy_dx_src = src_ext.CalcDeriv(1.);
@@ -373,7 +373,7 @@ void TestAPIFeatures() {
 
    // 4. Move Semantics (Internal Mode)
    t_spline_internal src_int;
-   src_int.TextLoad("spline_tanh.txt");
+   src_int.TextLoad("./data/spline_tanh.txt");
    y_src = src_int.Calc(1.);
    dy_dx_src = src_int.CalcDeriv(1.);
 
