@@ -13,7 +13,6 @@
 #include <type_traits>
 
 namespace ns_base {
-   
    // Simple exception class to replace the EXCEPT_MAP system
    class LRSplinesException : public std::runtime_error {
    public:
@@ -204,7 +203,7 @@ namespace ns_base {
    template<class P_Type, N_SplineMode P_Mode = smInternal>
    class T_UnifiedMonotonicSpline : private std::conditional_t<P_Mode == smInternal, S_MLRSInternalData<P_Type>, S_MLRSCacheStorage<P_Type, std::vector>> {
    private:
-      // Used by ApplySplineUnified to select the calculation type
+      // Used by ApplySpline to select the calculation type
       enum N_CalcType { ctValue, ctDeriv };
 
    public:
@@ -390,25 +389,25 @@ namespace ns_base {
       t_val Calc(t_val x_in) const {
          if (this->x.empty())
             throw LRSplinesException(1, __FILE__, __LINE__, "Spline is not initialized.");
-         return ApplySplineUnified(x_in, this->x, this->y, this->w, this->d_left, this->d_right, false, ctValue);
+         return ApplySpline(x_in, this->x, this->y, this->w, this->d_left, this->d_right, false, ctValue);
       }
 
       t_val CalcInv(t_val y_in) const {
          if (this->x.empty())
             throw LRSplinesException(1, __FILE__, __LINE__, "Spline not initialized.");
-         return ApplySplineUnified(y_in, this->x, this->y, this->w, this->d_left, this->d_right, true, ctValue);
+         return ApplySpline(y_in, this->x, this->y, this->w, this->d_left, this->d_right, true, ctValue);
       }
 
       t_val CalcDeriv(t_val x_in) const {
          if (this->x.empty())
             throw LRSplinesException(1, __FILE__, __LINE__, "Spline is not initialized.");
-         return ApplySplineUnified(x_in, this->x, this->y, this->w, this->d_left, this->d_right, false, ctDeriv);
+         return ApplySpline(x_in, this->x, this->y, this->w, this->d_left, this->d_right, false, ctDeriv);
       }
 
       t_val CalcInvDeriv(t_val y_in) const {
          if (this->x.empty())
             throw LRSplinesException(1, __FILE__, __LINE__, "Spline not initialized.");
-         return ApplySplineUnified(y_in, this->x, this->y, this->w, this->d_left, this->d_right, true, ctDeriv);
+         return ApplySpline(y_in, this->x, this->y, this->w, this->d_left, this->d_right, true, ctDeriv);
       }
 
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -417,7 +416,7 @@ namespace ns_base {
       t_val Calc(const t_val* p_params, size_t n_of_params, t_val x_in) const {
          if constexpr (P_Mode == smExternal) {
             auto [x, y, w, d_left, d_right] = ProcessExternalParams(p_params, n_of_params);
-            return ApplySplineUnified(x_in, x, y, w, d_left, d_right, false, ctValue);
+            return ApplySpline(x_in, x, y, w, d_left, d_right, false, ctValue);
          }
          else {
             static_assert(P_Mode == smExternal, "Calc(params, ...) is only available in External mode.");
@@ -428,7 +427,7 @@ namespace ns_base {
       t_val CalcInv(const t_val* p_params, size_t n_of_params, t_val y_in) const {
          if constexpr (P_Mode == smExternal) {
             auto [x, y, w, d_left, d_right] = ProcessExternalParams(p_params, n_of_params);
-            return ApplySplineUnified(y_in, x, y, w, d_left, d_right, true, ctValue);
+            return ApplySpline(y_in, x, y, w, d_left, d_right, true, ctValue);
          }
          else {
             static_assert(P_Mode == smExternal, "CalcInv(params, ...) is only available in External mode.");
@@ -439,7 +438,7 @@ namespace ns_base {
       t_val CalcDeriv(const t_val* p_params, size_t n_of_params, t_val x_in) const {
          if constexpr (P_Mode == smExternal) {
             auto [x, y, w, d_left, d_right] = ProcessExternalParams(p_params, n_of_params);
-            return ApplySplineUnified(x_in, x, y, w, d_left, d_right, false, ctDeriv);
+            return ApplySpline(x_in, x, y, w, d_left, d_right, false, ctDeriv);
          }
          else {
             static_assert(P_Mode == smExternal, "CalcDeriv(params, ...) is only available in External mode.");
@@ -450,7 +449,7 @@ namespace ns_base {
       t_val CalcInvDeriv(const t_val* p_params, size_t n_of_params, t_val y_in) const {
          if constexpr (P_Mode == smExternal) {
             auto [x, y, w, d_left, d_right] = ProcessExternalParams(p_params, n_of_params);
-            return ApplySplineUnified(y_in, x, y, w, d_left, d_right, true, ctDeriv);
+            return ApplySpline(y_in, x, y, w, d_left, d_right, true, ctDeriv);
          }
          else {
             static_assert(P_Mode == smExternal, "CalcInvDeriv(params, ...) is only available in External mode.");
@@ -548,7 +547,7 @@ namespace ns_base {
             auto [x_knots, y_knots, w_knots, d_left, d_right] = CalculateKnots(n, p_x_pos, p_x_neg, p_y_pos, p_y_neg, p_ln_d, x_0_val, y_0_val);
 
             // 2. Calculate x = g(y) using the precomputed knots via the unified internal function.
-            t_val x_val = ApplySplineUnified(y_in, x_knots, y_knots, w_knots, d_left, d_right, true, ctValue);
+            t_val x_val = ApplySpline(y_in, x_knots, y_knots, w_knots, d_left, d_right, true, ctValue);
 
             // 3. Calculate forward gradients: dy/dP at x using the unified internal function.
             t_params grads = CalculateGradientsUnified(
@@ -560,7 +559,7 @@ namespace ns_base {
                   );
 
             // 4. Calculate forward derivative: dy/dx at x. Note: 'inverse' parameter is false here as we want the forward derivative.
-            t_val deriv = ApplySplineUnified(x_val, x_knots, y_knots, w_knots, d_left, d_right, false, ctDeriv);
+            t_val deriv = ApplySpline(x_val, x_knots, y_knots, w_knots, d_left, d_right, false, ctDeriv);
             
             // 5. Apply Implicit Function Theorem and scale robustly.
             ApplyImplicitGradientScale(grads, deriv);
@@ -686,7 +685,7 @@ namespace ns_base {
             // Calculate g(v) and Local Adjoints
             const t_val a = w[j-1] * (x[j] - v_eval);
             const t_val b = w[j] * (v_eval - x[j-1]);
-            // Ensure s matches the forward pass clamp (ApplySplineUnified)
+            // Ensure s matches the forward pass clamp (ApplySpline)
             const t_val s = safe(a + b);
             // Optimization: Reuse inverse
             const t_val inv_s = t_val(1.) / s;
@@ -967,7 +966,7 @@ namespace ns_base {
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       // Core Spline Application Logic (Unified for Value and Derivative)
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-      t_val ApplySplineUnified(t_val v_in, const t_param_arr& x, const t_param_arr& y, const t_param_arr& w, t_val d_left, t_val d_right, bool inverse, N_CalcType calc_type) const {
+      t_val ApplySpline(t_val v_in, const t_param_arr& x, const t_param_arr& y, const t_param_arr& w, t_val d_left, t_val d_right, bool inverse, N_CalcType calc_type) const {
          const size_t n_of_nodes = x.size();
          if (n_of_nodes == 0)
             throw LRSplinesException(2, __FILE__, __LINE__, "Spline knots are empty or not initialized.");
@@ -983,31 +982,31 @@ namespace ns_base {
 
          // 2. Finalization (handling direction multiplier for output)
          auto finalize = [&](t_val res) {
-               if (calc_type == ctDeriv) {
-                  // Derivative: Chain rule applies multiplication by m_direction_multiplier (1 or -1).
-                  // Forward: F'(x) = G'(-x)*(-1). Inverse: H'(y) = -G_inv'(y).
-                  return res * m_direction_multiplier;
-               }
-               // ctValue: Matches original ApplySpline logic.
+            if (calc_type == ctDeriv) {
+               // Derivative: Chain rule applies multiplication by m_direction_multiplier (1 or -1).
+               // Forward: F'(x) = G'(-x)*(-1). Inverse: H'(y) = -G_inv'(y).
+               return res * m_direction_multiplier;
+            }
+            // ctValue: Matches original ApplySpline logic.
             return inverse && m_direction_multiplier < 0 ? -res : res;
          };
 
          // 3. Boundary conditions (tails)
          if (v_in <= search[0]) {
-               // Slope (of the internal increasing spline)
-               t_val factor = inverse ? t_val(1.)/std::max(d_left, eps) : d_left;
-               if (calc_type == ctDeriv)
-                  return finalize(factor);
-               // ctValue
+            // Slope (of the internal increasing spline)
+            t_val factor = inverse ? t_val(1.)/std::max(d_left, eps) : d_left;
+            if (calc_type == ctDeriv)
+               return finalize(factor);
+            // ctValue
             return finalize(output[0] + (v_in - search[0]) * factor);
          }
 
          if (v_in >= search.back()) {
-               // Slope (of the internal increasing spline)
-               t_val factor = inverse ? t_val(1.)/std::max(d_right, eps) : d_right;
-               if (calc_type == ctDeriv)
-                  return finalize(factor);
-               // ctValue
+            // Slope (of the internal increasing spline)
+            t_val factor = inverse ? t_val(1.)/std::max(d_right, eps) : d_right;
+            if (calc_type == ctDeriv)
+               return finalize(factor);
+            // ctValue
             return finalize(output.back() + (v_in - search.back()) * factor);
          }
 
@@ -1028,11 +1027,11 @@ namespace ns_base {
          // Calculate interpolation weights (v1, v2) which form the denominator.
          // The weights used depend on whether we are in forward or inverse mode, matching the original implementation.
          if (inverse) {
-               // Inverse: D_inv(y) = w_{k+1}*(y_{k+1}-y) + w_k*(y-y_k)
+            // Inverse: D_inv(y) = w_{k+1}*(y_{k+1}-y) + w_k*(y-y_k)
             v1 = w_k1 * (y_k1 - v_in);
             v2 = w_k * (v_in - y_k);
          } else {
-               // Forward: D(x) = w_k*(x_{k+1}-x) + w_{k+1}*(x-x_k)
+            // Forward: D(x) = w_k*(x_{k+1}-x) + w_{k+1}*(x-x_k)
             v1 = w_k * (x_k1 - v_in);
             v2 = w_k1 * (v_in - x_k);
          }
@@ -1047,10 +1046,10 @@ namespace ns_base {
 
          // ctValue
          if (inverse) {
-               // Inverse: x = (x_k*v1 + x_{k+1}*v2) / D
+            // Inverse: x = (x_k*v1 + x_{k+1}*v2) / D
             return finalize((x_k * v1 + x_k1 * v2) / denominator);
          } else {
-               // Forward: y = (y_k*v1 + y_{k+1}*v2) / D
+            // Forward: y = (y_k*v1 + y_{k+1}*v2) / D
             return finalize((y_k * v1 + y_k1 * v2) / denominator);
          }
       }
@@ -1063,6 +1062,6 @@ namespace ns_base {
 
    template<class T>
    using T_LRSplinesInput = T_UnifiedMonotonicSpline<T, smExternal>;
-}
 
+} // namespace ns_base
 #endif // LR_SPLINES_H
