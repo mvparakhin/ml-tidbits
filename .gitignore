@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 .venv/
 /cpp/tests/data/.vs
+/cpp/tests/.vs
