@@ -7,3 +7,8 @@ __pycache__/
 .venv/
 /cpp/tests/data/.vs
 /cpp/tests/.vs
+/cpp/VCProj/.vs/VCProj
+/cpp/VCProj/VCProj/x64/Debug
+/cpp/VCProj/x64/Debug
+/cpp/VCProj/VCProj/x64/Release
+/cpp/VCProj/x64/Release
