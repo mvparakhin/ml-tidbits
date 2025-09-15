@@ -38,9 +38,10 @@ namespace ns_base {
          return oss.str();
       }
    };
+   constexpr inline size_t c_max_mlr_n = 8;
 
    template<typename T>
-   constexpr T Epsilon() {
+   constexpr T SplineEpsilon() {
       if constexpr (std::is_same_v<T, float>)
          return 1e-6f;
       else
@@ -101,54 +102,86 @@ namespace ns_base {
       using t_param_arr = P_Container;
       using t_val = typename P_Container::value_type;
 
-      t_param_arr x_pos, x_neg, y_pos, y_neg, ln_d;
-      t_val x_0{t_val(0.)}, y_0{t_val(0.)};
+   private:
+      t_param_arr m_data; // Contiguous storage (8N+3)
+      size_t m_n = 0;
 
+      static constexpr size_t CalculateTotalSize(size_t n) noexcept { return 8*n + 3; }
+
+   public:
+      // Pointers for array segments
+      t_val* x_pos = nullptr;
+      t_val* x_neg = nullptr;
+      t_val* y_pos = nullptr;
+      t_val* y_neg = nullptr;
+      t_val* ln_d = nullptr;
+
+      // Pointers for scalar parameters (managed by SetupPointers)
+      t_val* p_x_0 = nullptr;
+      t_val* p_y_0 = nullptr;
+
+   public:
       S_MLRSUnconstrainedParams() = default;
       explicit S_MLRSUnconstrainedParams(size_t n) { Init(n); }
-      S_MLRSUnconstrainedParams(const S_MLRSUnconstrainedParams&) = default;
-      S_MLRSUnconstrainedParams& operator=(const S_MLRSUnconstrainedParams&) = default;
-      S_MLRSUnconstrainedParams(S_MLRSUnconstrainedParams&& rhs) noexcept :
-         x_pos(std::move(rhs.x_pos)), x_neg(std::move(rhs.x_neg)),
-         y_pos(std::move(rhs.y_pos)), y_neg(std::move(rhs.y_neg)),
-         ln_d(std::move(rhs.ln_d)),
-         x_0(rhs.x_0), y_0(rhs.y_0) {
-         rhs.x_pos.clear(); // Invalidate the source object
+
+      // Custom Copy/Move semantics to ensure pointers are updated correctly.
+      S_MLRSUnconstrainedParams(const S_MLRSUnconstrainedParams& rhs) : m_data(rhs.m_data), m_n(rhs.m_n) {
+         SetupPointers();
       }
-      S_MLRSUnconstrainedParams& operator=(S_MLRSUnconstrainedParams&& rhs) noexcept {
+
+      S_MLRSUnconstrainedParams& operator=(const S_MLRSUnconstrainedParams& rhs) {
          if (this != &rhs) {
-            x_pos = std::move(rhs.x_pos);
-            x_neg = std::move(rhs.x_neg);
-            y_pos = std::move(rhs.y_pos);
-            y_neg = std::move(rhs.y_neg);
-            ln_d = std::move(rhs.ln_d);
-            x_0 = rhs.x_0;
-            y_0 = rhs.y_0;
-            rhs.x_pos.clear(); // Invalidate the source object
+            m_data = rhs.m_data;
+            m_n = rhs.m_n;
+            SetupPointers();
          }
          return *this;
       }
 
-      void Init(size_t n) {
-         x_pos.resize(2*n, t_val(0.)); x_neg.resize(2*n, t_val(0.));
-         y_pos.resize(n, t_val(0.)); y_neg.resize(n, t_val(0.));
-         ln_d.resize(2*n + 1, t_val(0.));
-         x_0 = y_0 = t_val(0.);
+      S_MLRSUnconstrainedParams(S_MLRSUnconstrainedParams&& rhs) noexcept : m_data(std::move(rhs.m_data)), m_n(rhs.m_n) {
+         SetupPointers();
+         rhs.Invalidate(); // Invalidate the source object
       }
-      size_t N() const noexcept { return y_pos.size(); }
+
+      S_MLRSUnconstrainedParams& operator=(S_MLRSUnconstrainedParams&& rhs) noexcept {
+         if (this != &rhs) {
+            m_data = std::move(rhs.m_data);
+            m_n = rhs.m_n;
+            SetupPointers();
+            rhs.Invalidate(); // Invalidate the source object
+         }
+         return *this;
+      }
+
+      void Init(size_t n, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) {
+         m_n = n;
+         m_data.resize(CalculateTotalSize(n));
+         std::fill(m_data.begin(), m_data.end(), t_val(0.));
+         SetupPointers();
+         if (x_step != t_val(1.))
+            std::fill(x_pos, y_pos, log(x_step)); // y_pos is after both x_pos and x_neg
+         if (y_step != t_val(1.))
+            std::fill(y_pos, ln_d, log(y_step)); // ln_d is after y_pos and y_neg
+      }
+
+      size_t N() const noexcept { return m_n; }
       size_t NOfGroups() const noexcept { return size_t(lrsLast); }
       size_t size(N_MLRSParamType group_id) const {
          switch(group_id) {
-         case lrsXPos: return x_pos.size();
-         case lrsXNeg: return x_neg.size();
-         case lrsYPos: return y_pos.size();
-         case lrsYNeg: return y_neg.size();
-         case lrsLnD: return ln_d.size();
+         case lrsXPos: return 2*m_n;
+         case lrsXNeg: return 2*m_n;
+         case lrsYPos: return m_n;
+         case lrsYNeg: return m_n;
+         case lrsLnD: return 2*m_n + 1;
          case lrsX0Y0: return 2;
          default:
             throw LRSplinesException(2, __FILE__, __LINE__, std::to_string(size_t(group_id)));
          }
       }
+      size_t size() const noexcept { return m_data.size(); }
+
+      t_val& operator[](size_t i) { return m_data[i]; }
+      const t_val& operator[](size_t i) const { return m_data[i]; }
 
       t_val& operator()(N_MLRSParamType group_id, size_t param_id) {
          switch(group_id) {
@@ -157,16 +190,87 @@ namespace ns_base {
          case lrsYPos: return y_pos[param_id];
          case lrsYNeg: return y_neg[param_id];
          case lrsLnD: return ln_d[param_id];
-         case lrsX0Y0:
-            if (param_id>1)
-               throw LRSplinesException(2, __FILE__, __LINE__, std::to_string(param_id));
-            return param_id? y_0 : x_0;
+         case lrsX0Y0: return p_x_0[param_id];
          default:
             throw LRSplinesException(2, __FILE__, __LINE__, std::to_string(size_t(group_id)));
          }
       }
       const t_val& operator()(N_MLRSParamType group_id, size_t param_id) const {
          return const_cast<S_MLRSUnconstrainedParams*>(this)->operator()(group_id, param_id);
+      }
+
+      ///////////////////////////////////////////////////////////////////////////////////
+      // Arithmetic operations
+      ///////////////////////////////////////////////////////////////////////////////////
+      S_MLRSUnconstrainedParams& operator+=(const S_MLRSUnconstrainedParams& rhs) {
+         if (N() != rhs.N())
+            throw LRSplinesException(2, __FILE__, __LINE__, "Size mismatch");
+         for (size_t i=0, size = m_data.size(); i<size; ++i)
+            m_data[i] += rhs.m_data[i];
+         return *this;
+      }
+      S_MLRSUnconstrainedParams& operator*=(t_val v) noexcept {
+         for (auto& item : m_data) item *= v;
+         return *this;
+      }
+      S_MLRSUnconstrainedParams& operator-=(const S_MLRSUnconstrainedParams& rhs) {
+         if (N() != rhs.N())
+            throw LRSplinesException(2, __FILE__, __LINE__, "Size mismatch");
+         for (size_t i=0, size = m_data.size(); i<size; ++i)
+            m_data[i] -= rhs.m_data[i];
+         return *this;
+      }
+      S_MLRSUnconstrainedParams& operator/=(t_val v) {
+         return operator*=(t_val(1.)/v);
+      }
+
+      friend S_MLRSUnconstrainedParams operator+(S_MLRSUnconstrainedParams lhs, const S_MLRSUnconstrainedParams& rhs) {
+         return lhs += rhs;
+      }
+      friend S_MLRSUnconstrainedParams operator-(S_MLRSUnconstrainedParams lhs, const S_MLRSUnconstrainedParams& rhs) {
+         return lhs -= rhs;
+      }
+      friend S_MLRSUnconstrainedParams operator*(S_MLRSUnconstrainedParams lhs, t_val v) {
+         return lhs *= v;
+      }
+      friend S_MLRSUnconstrainedParams operator*(t_val v, S_MLRSUnconstrainedParams rhs) {
+         return rhs *= v;
+      }
+      friend S_MLRSUnconstrainedParams operator/(S_MLRSUnconstrainedParams lhs, t_val v) {
+         return lhs /= v;
+      }
+      friend S_MLRSUnconstrainedParams operator-(S_MLRSUnconstrainedParams val) {
+         return val *= t_val(-1.);
+      }
+
+   private:
+      ///////////////////////////////////////////////////////////////////////////////////
+      // Initialize pointers based on current m_n and m_data
+      ///////////////////////////////////////////////////////////////////////////////////
+      void SetupPointers() {
+         if (m_data.empty()) {
+            x_pos = x_neg = y_pos = y_neg = ln_d = nullptr;
+            p_x_0 = p_y_0 = nullptr;
+            return;
+         }
+
+         t_val* base = m_data.data();
+         x_pos = base;
+         x_neg = base + 2*m_n;
+         y_pos = base + 4*m_n;
+         y_neg = base + 5*m_n;
+         ln_d = base + 6*m_n;
+         // ln_d size is 2N+1. Start index of x_0 is 6N + 2N+1 = 8N+1.
+         p_x_0 = base + 8*m_n + 1;
+         p_y_0 = base + 8*m_n + 2;
+      }
+      ///////////////////////////////////////////////////////////////////////////////////
+      // Invalidate the object, when moved from or on error
+      ///////////////////////////////////////////////////////////////////////////////////
+      void Invalidate() {
+         m_data.clear();
+         m_n = 0;
+         SetupPointers(); // Nulls out all pointers
       }
    };
 
@@ -188,14 +292,15 @@ namespace ns_base {
       using t_base2::y_pos;
       using t_base2::y_neg;
       using t_base2::ln_d;
-      using t_base2::x_0;
-      using t_base2::y_0;
+      using t_base2::p_x_0;
+      using t_base2::p_y_0;
 
 
       using t_base2::N;
       using t_base2::NOfGroups;
       using t_base2::size;
       using t_base2::operator();
+      using t_base2::Init; // Expose Init for use in T_UnifiedMonotonicSpline::TextLoad
    };
 
    //#########################################################################################################################################################################################
@@ -205,6 +310,9 @@ namespace ns_base {
    private:
       // Used by ApplySpline to select the calculation type
       enum N_CalcType { ctValue, ctDeriv };
+      // Tag types for constructor selection
+      struct internal_tag {};
+      struct external_tag {};
 
    public:
       struct S_GradVerifier {
@@ -263,26 +371,47 @@ namespace ns_base {
       };
 
    public:
-      T_UnifiedMonotonicSpline(bool centered = true, int direction = 1) {
-         Init(centered, direction);
-      }
-      T_UnifiedMonotonicSpline(const t_val* p_params, size_t n_of_params) {
+      // Internal mode constructor with size
+      explicit T_UnifiedMonotonicSpline(size_t n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) : 
+                                                      T_UnifiedMonotonicSpline(internal_tag{}, n, centered, direction, x_step, y_step) {}
+      // Both mode constructor
+      explicit T_UnifiedMonotonicSpline(bool centered = true, int direction = 1) : T_UnifiedMonotonicSpline(external_tag{}, centered, direction) {}
+      // External-only mode constructor
+      T_UnifiedMonotonicSpline(const t_val* p_params, size_t n_of_params, bool centered = true, int direction = 1) {
          if constexpr (P_Mode == smExternal) {
-            Init(true, 1);
+            Init(centered, direction);
             UpdateCache(p_params, n_of_params);
          }
-         else {
+         else
             static_assert(P_Mode == smExternal, "Constructor with (params, size) is intended for External mode (T_LRSplinesInput).");
-         }
       }
+
+   private:
+      T_UnifiedMonotonicSpline(internal_tag, size_t n, bool centered, int direction, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) {
+         static_assert(P_Mode == smInternal, "This constructor is only available in Internal mode");
+         Init(n, centered, direction, x_step, y_step);
+      }
+      T_UnifiedMonotonicSpline(external_tag, bool centered, int direction) {
+         if constexpr (P_Mode == smExternal)
+            Init(centered, direction);
+         else
+            Init(0, centered, direction);
+      }
+
+   public:
       const auto& Container() const noexcept { return *(t_base*)(this); }
+
+      template <ns_base::N_SplineMode I = P_Mode>
+      std::enable_if_t<I == ns_base::smInternal, const t_params&> ParamContainer() const noexcept { return *static_cast<const t_params*>(this); }
+
       bool IsCentered() const noexcept { return m_centered; }
       bool IsDecreasing() const noexcept { return m_direction_multiplier < 0; }
 
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       // Unified Initialization
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-      void Init(bool centered, int direction) {
+   private:
+      void InitImpl(bool centered, int direction) {
          m_centered = centered;
          if (direction == 1)
             m_direction_multiplier = t_val(1.);
@@ -291,11 +420,16 @@ namespace ns_base {
          else
             throw LRSplinesException(4, __FILE__, __LINE__, "Direction must be 1 or -1");
 
-         if constexpr (P_Mode == smInternal) {
-            if (!this->x_pos.empty())
-               UpdateDerivedInfo();
-         }
+         if constexpr (P_Mode == smInternal)
+            UpdateDerivedInfo();
       }
+
+   public:
+      template<N_SplineMode Mode = P_Mode>
+      std::enable_if_t<Mode == smExternal, void> Init(bool centered = true, int direction = 1) { InitImpl(centered, direction); }
+
+      template<N_SplineMode Mode = P_Mode>
+      std::enable_if_t<Mode == smInternal, void> Init(size_t n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) { this->t_base2::Init(n, x_step, y_step); InitImpl(centered, direction); }
 
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       // Mode 1: Loading from file (unified function)
@@ -308,7 +442,8 @@ namespace ns_base {
          std::ifstream fin(file_name);
          if (!fin.is_open())
             throw LRSplinesException(3, __FILE__, __LINE__, file_name + ": Cannot open file.");
-            
+
+         std::streampos start_pos = fin.tellg();
          std::string first_line;
          if (!std::getline(fin, first_line) || first_line.empty())
             throw LRSplinesException(3, __FILE__, __LINE__, file_name + ": File is empty or unreadable.");
@@ -316,13 +451,16 @@ namespace ns_base {
          size_t version = 1000;
          if (first_line.find("#VER = ") == 0) {
             version = std::stoul(first_line.substr(7));
-            // Version header consumed, read next line
+            // Version header consumed by getline, next read starts at the data.
          } else {
-            // No version header, put back the line by resetting and re-reading
-            fin.clear();
-            fin.seekg(0);
+            // No version header, rewind the stream to read the first line as data.
+            fin.clear(); // Clear any potential EOF/fail flags set by getline
+            fin.seekg(start_pos);
          }
 
+         // We use a temporary buffer (assuming t_param_arr is std::vector<t_val> or similar)
+         // because N is unknown until the first line is read, and members (x_pos etc.) are now pointers.
+         t_param_arr temp_buffer;
          auto read_line = [&](t_param_arr& arr, size_t expected_size = 0, bool is_optional = false) -> bool {
             std::string str;
             if (!std::getline(fin, str)) {
@@ -345,31 +483,34 @@ namespace ns_base {
             return true;
          };
 
-         read_line(this->x_pos);
-         size_t size_2n = this->x_pos.size();
+         read_line(temp_buffer);
+         size_t size_2n = temp_buffer.size();
          if (size_2n < 2 || size_2n % 2 != 0)
             throw LRSplinesException(3, __FILE__, __LINE__, file_name + ": x_pos size must be even and >= 2.");
          size_t n = size_2n / 2;
 
-         read_line(this->x_neg, size_2n); //adjusting Internal mode at the load, so that everywhere else we uniformly divide by 2, avoiding extra buffers
+         ParamContainer().Init(n);
+         std::copy(temp_buffer.begin(), temp_buffer.end(), this->x_pos);
+         read_line(temp_buffer, size_2n);
+         std::copy(temp_buffer.begin(), temp_buffer.end(), this->x_neg);
          for (size_t i=0; i<size_2n; ++i) {
             this->x_pos[i] += c_log2;
             this->x_neg[i] += c_log2;
          }
-         read_line(this->y_pos, n);
-         read_line(this->y_neg, n);
-         read_line(this->ln_d, size_2n + 1);
 
-         t_param_arr center_param;
-         if (read_line(center_param, 2, true)) {
-            this->x_0 = center_param[0];
-            this->y_0 = center_param[1];
+         read_line(temp_buffer, n);
+         std::copy(temp_buffer.begin(), temp_buffer.end(), this->y_pos);
+         read_line(temp_buffer, n);
+         std::copy(temp_buffer.begin(), temp_buffer.end(), this->y_neg);
+         read_line(temp_buffer, size_2n + 1);
+         std::copy(temp_buffer.begin(), temp_buffer.end(), this->ln_d);
+         if (read_line(temp_buffer, 2, true)) {
+            *this->p_x_0 = temp_buffer[0];
+            *this->p_y_0 = temp_buffer[1];
             m_centered = false;
          }
-         else {
-            m_centered = true;
-            this->x_0 = this->y_0 = t_val(0.);
-         }
+         else
+            m_centered = true; // p_x_0 and p_y_0 point to data that should already be 0 if Init(n) zero-initializes the memory.
          UpdateDerivedInfo();
       }
 
@@ -462,7 +603,7 @@ namespace ns_base {
       ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       t_params CalculateGradients(t_val v_in) const {
          if constexpr (P_Mode == smInternal) {
-            if (this->x_pos.empty() || this->x.empty())
+            if (!this->N() || this->x.empty())
                throw LRSplinesException(1, __FILE__, __LINE__, "Spline not initialized or cache outdated.");
 
             const size_t n = this->N();
@@ -470,9 +611,9 @@ namespace ns_base {
             // Call the unified implementation using internal storage
             return CalculateGradientsUnified(
                v_in, n,
-               this->x_pos.data(), this->x_neg.data(),
-               this->y_pos.data(), this->y_neg.data(),
-               this->ln_d.data(),
+               this->x_pos, this->x_neg,
+               this->y_pos, this->y_neg,
+               this->ln_d,
                this->x, this->y, this->w
             );
          }
@@ -488,7 +629,6 @@ namespace ns_base {
       ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       t_params CalculateGradients(const t_val* p_params, size_t n_of_params, t_val v_in) const {
          if constexpr (P_Mode == smExternal) {
-            
             // 1. Process parameters to validate and calculate knots (X, Y, W).
             // 2. Extract N and pointers (Duplicates extraction logic from ProcessExternalParams, as pointers are needed).
             auto [n, p_x_pos, p_x_neg, p_y_pos, p_y_neg, p_ln_d, x_0, y_0] = UnpackParams(p_params, n_of_params);
@@ -551,12 +691,12 @@ namespace ns_base {
 
             // 3. Calculate forward gradients: dy/dP at x using the unified internal function.
             t_params grads = CalculateGradientsUnified(
-                        x_val, n,
-                        p_x_pos, p_x_neg,
-                        p_y_pos, p_y_neg,
-                        p_ln_d,
-                        x_knots, y_knots, w_knots
-                  );
+               x_val, n,
+               p_x_pos, p_x_neg,
+               p_y_pos, p_y_neg,
+               p_ln_d,
+               x_knots, y_knots, w_knots
+            );
 
             // 4. Calculate forward derivative: dy/dx at x. Note: 'inverse' parameter is false here as we want the forward derivative.
             t_val deriv = ApplySpline(x_val, x_knots, y_knots, w_knots, d_left, d_right, false, ctDeriv);
@@ -573,38 +713,31 @@ namespace ns_base {
       
    private:
       auto& Container() noexcept { return *(t_base*)(this); }
+      template <ns_base::N_SplineMode I = P_Mode>
+      std::enable_if_t<I == ns_base::smInternal, t_params&> ParamContainer() noexcept { return *static_cast<t_params*>(this); }
       
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////      
       // Helper function to apply scaling based on Implicit Function Theorem: dx/dP = - (dy/dP) / (dy/dx)
-      // Calculates factor = -1 / deriv. Handles saturation (deriv ≈ 0) robustly.
+      // Calculates factor = -1 / deriv. Handles saturation (deriv ~ 0) robustly.
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       void ApplyImplicitGradientScale(t_params& p, t_val deriv) const {
-          // Use the robust epsilon (e.g., 1e-6) to detect saturation.
-          const t_val eps = Epsilon<t_val>();
+         // Use the robust SplineEpsilon (e.g., 1e-6) to detect saturation.
+         const t_val eps = SplineEpsilon<t_val>();
       
-          if (std::abs(deriv) < eps) {
-              // Saturation region (dy/dx ≈ 0). Inverse gradients approach infinity.
-              // We zero out the gradients for numerical stability, a common practice in optimization.
-              const size_t n = p.N();
-              // Init(n) correctly resizes (if necessary) and resets all elements to zero.
-              p.Init(n); 
-              return;
-          }
+         if (std::abs(deriv) < eps) {
+            // Saturation region (dy/dx ~ 0). Inverse gradients approach infinity.
+            // We zero out the gradients for numerical stability, a common practice in optimization.
+            const size_t n = p.N();
+            // Init(n) correctly resizes (if necessary) and resets all elements to zero.
+            p.Init(n); 
+            return;
+         }
       
-          // Calculate the scaling factor: -1 / (dy/dx)
-          t_val scale = t_val(-1.) / deriv;
-      
-          // Apply the factor to all gradient components (dy/dP)
-          // We iterate manually as S_MLRSUnconstrainedParams does not have a global operator*= in the provided baseline.
-          for (auto& v : p.x_pos) v *= scale;
-          for (auto& v : p.x_neg) v *= scale;
-          for (auto& v : p.y_pos) v *= scale;
-          for (auto& v : p.y_neg) v *= scale;
-          for (auto& v : p.ln_d) v *= scale;
+         // Calculate the scaling factor: -1 / (dy/dx)
+         t_val scale = t_val(-1.) / deriv;
           
-          // x_0 and y_0 must also be scaled if the spline is not centered.
-          p.x_0 *= scale;
-          p.y_0 *= scale;
+         // Apply the factor to all gradient components (dy/dP)
+         p *= scale;
       }
 
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -621,7 +754,7 @@ namespace ns_base {
          // 1. Setup and Constants
          const size_t n_of_2n = 2 * n;
          const size_t n_of_nodes = 4 * n;
-         const t_val eps = Epsilon<t_val>();
+         const t_val eps = SplineEpsilon<t_val>();
 
          // Helper for safe clamping (consistent with forward pass clamps)
          auto safe = [&](t_val z) { return std::max(z, eps); };
@@ -657,7 +790,7 @@ namespace ns_base {
             // 3.1. Left Tail
             const t_val d_left = acc.derivs()[0];
             if (!m_centered)
-               grads.y_0 = 1., grads.x_0 = -d_left;
+               *grads.p_y_0 = 1., *grads.p_x_0 = -d_left;
             grads.ln_d[0] = d_left * (v_eval - x[0]);
             for (size_t k = 0; k < n_of_2n; ++k)
                grads.x_neg[k] = d_left * acc.x_neg_exp()[k];
@@ -669,7 +802,7 @@ namespace ns_base {
             // 3.2. Right Tail
             const t_val d_right = acc.derivs()[n_of_2n];
             if (!m_centered)
-               grads.y_0 = 1., grads.x_0 = -d_right;
+               *grads.p_y_0 = 1.,  *grads.p_x_0 = -d_right;
             grads.ln_d[n_of_2n] = d_right * (v_eval - x[n_of_nodes]);
             for (size_t k = 0; k < n_of_2n; ++k)
                grads.x_pos[k] = -d_right * acc.x_pos_exp()[k];
@@ -700,8 +833,8 @@ namespace ns_base {
 
             // Center Coordinates
             if (!m_centered) {
-               grads.x_0 = adj_x_jm1 + adj_x_j;
-               grads.y_0 = (a + b) * inv_s;
+               *grads.p_x_0 = adj_x_jm1 + adj_x_j;
+               *grads.p_y_0 = (a + b) * inv_s;
             }
 
             // Helper lambda to apply the chain rule for a node s (j-1 or j)
@@ -746,8 +879,8 @@ namespace ns_base {
 
                   const t_val* p_p_exp = is_pos ? acc.x_pos_exp() : acc.x_neg_exp();
                   const t_val* p_h_exp = is_pos ? acc.y_pos_exp() : acc.y_neg_exp();
-                  t_val* p_grad_x = is_pos ? grads.x_pos.data() : grads.x_neg.data();
-                  t_val* p_grad_y = is_pos ? grads.y_pos.data() : grads.y_neg.data();
+                  t_val* p_grad_x = is_pos ? grads.x_pos : grads.x_neg;
+                  t_val* p_grad_y = is_pos ? grads.y_pos : grads.y_neg;
 
                   // Local variables for the bin (ensure clamps match forward pass)
                   const t_val p0 = p_p_exp[2*i], p1 = p_p_exp[2*i+1];
@@ -821,15 +954,15 @@ namespace ns_base {
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       void UpdateDerivedInfo() {
          if constexpr (P_Mode == smInternal) {
-            if (this->x_pos.empty())
-               throw LRSplinesException(1, __FILE__, __LINE__, "Internal parameters not loaded or incomplete.");
+            if (!this->N())
+               return;
 
             std::tie(this->x, this->y, this->w, this->d_left, this->d_right) = CalculateKnots(
-               this->y_pos.size(),
-               this->x_pos.data(), this->x_neg.data(),
-               this->y_pos.data(), this->y_neg.data(),
-               this->ln_d.data(),
-               this->x_0, this->y_0
+               this->N(),
+               this->x_pos, this->x_neg,
+               this->y_pos, this->y_neg,
+               this->ln_d,
+               *this->p_x_0, *this->p_y_0
             );
          }
       }
@@ -839,7 +972,7 @@ namespace ns_base {
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       std::tuple<size_t, const t_val*, const t_val*, const t_val*, const t_val*, const t_val*, t_val, t_val> UnpackParams(const t_val* p_params, size_t n_of_params) const {
          size_t w_offset = m_centered ? 1 : 3;
-         if (n_of_params % 2 != 1 || n_of_params < 8 + w_offset || (n_of_params - w_offset) % 8 != 0) {
+         if (n_of_params < 8 + w_offset || (n_of_params - w_offset) % 8 != 0) {
             std::string expected = m_centered ? "8*N+1" : "8*N+3";
             throw LRSplinesException(2, __FILE__, __LINE__, "Incorrect number of parameters. Expected " + expected + " (N>=1).");
          }
@@ -882,7 +1015,7 @@ namespace ns_base {
          t_val x_0, t_val y_0) const {
          const size_t size_2n = 2 * n;
          const size_t total_nodes = 4 * n + 1;
-         const t_val eps = Epsilon<t_val>();
+         const t_val eps = SplineEpsilon<t_val>();
 
          t_param_arr x(total_nodes), y(total_nodes), w(total_nodes);
 
@@ -971,7 +1104,7 @@ namespace ns_base {
          if (n_of_nodes == 0)
             throw LRSplinesException(2, __FILE__, __LINE__, "Spline knots are empty or not initialized.");
 
-         const t_val eps = Epsilon<t_val>();
+         const t_val eps = SplineEpsilon<t_val>();
 
          // 1. Input transformation (for forward mode with negative direction: g_out(x) = g_spline(-x))
          if (!inverse && m_direction_multiplier < 0)
@@ -1023,7 +1156,6 @@ namespace ns_base {
          t_val y_k = y[idx - 1], y_k1 = y[idx];
 
          t_val v1, v2;
-
          // Calculate interpolation weights (v1, v2) which form the denominator.
          // The weights used depend on whether we are in forward or inverse mode, matching the original implementation.
          if (inverse) {
@@ -1039,19 +1171,16 @@ namespace ns_base {
          t_val denominator = std::max(v1 + v2, eps);
 
          if (calc_type == ctDeriv) {
-               // Derivative formula (symmetric for forward/inverse):
-               t_val numerator = w_k * w_k1 * (y_k1 - y_k) * (x_k1 - x_k);
-               return finalize(numerator / (denominator * denominator));
+            // Derivative formula (symmetric for forward/inverse):
+            t_val numerator = w_k * w_k1 * (y_k1 - y_k) * (x_k1 - x_k);
+            return finalize(numerator / (denominator * denominator));
          }
 
          // ctValue
-         if (inverse) {
-            // Inverse: x = (x_k*v1 + x_{k+1}*v2) / D
-            return finalize((x_k * v1 + x_k1 * v2) / denominator);
-         } else {
-            // Forward: y = (y_k*v1 + y_{k+1}*v2) / D
-            return finalize((y_k * v1 + y_k1 * v2) / denominator);
-         }
+         if (inverse)
+            return finalize((x_k * v1 + x_k1 * v2) / denominator); // Inverse: x = (x_k*v1 + x_{k+1}*v2) / D
+         else
+            return finalize((y_k * v1 + y_k1 * v2) / denominator); // Forward: y = (y_k*v1 + y_{k+1}*v2) / D
       }
    };
 
