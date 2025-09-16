@@ -3,17 +3,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import math
-from math import prod
+from typing import List, Tuple, Optional
 import numpy as np
 
 ##################################################################################################################################################
 # Helper Functions
 ##################################################################################################################################################
-def EpsForDtype(dtype):
+def EpsForDtype(dtype: torch.dtype, tight: bool = True) -> float:
    """Returns suitable epsilon for numerical stability based on dtype"""
    if dtype in (torch.float16, torch.bfloat16):
-      return 1e-4
-   return 1e-6
+      return 1e-6 if tight else 1e-4
+   return 1e-12 if tight else 1e-6
+
 
 ##################################################################################################################################################
 # UnifiedMonotonicSpline Implementation
@@ -87,10 +88,10 @@ class UnifiedMonotonicSpline(nn.Module):
          
          w = spline_weights.shape[-1]
          leading_input_shape = input_data.shape[:-1]
-         b_flat = prod(leading_input_shape) if input_data.ndim > 1 else 1
+         b_flat = torch.prod(torch.tensor(leading_input_shape)).item() if input_data.ndim > 1 else 1
          
          # Shape validation and reshaping
-         if spline_weights.shape[:-1] == leading_input_shape or (spline_weights.ndim >= 2 and prod(spline_weights.shape[:-1]) == b_flat):
+         if spline_weights.shape[:-1] == leading_input_shape or (spline_weights.ndim >= 2 and torch.prod(torch.tensor(spline_weights.shape[:-1])).item() == b_flat):
             weights_reshaped = spline_weights.reshape(b_flat, w)
          else:
             raise ValueError(f'External weights shape {spline_weights.shape} incompatible with input leading dims {leading_input_shape}')
@@ -108,7 +109,7 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # In Mode 2 we need to unpack parameters being sent in
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ParseExternalWeights(self, weights):
+   def _ParseExternalWeights(self, weights: torch.Tensor) -> List[torch.Tensor]:
       """Parse external weights into spline parameters"""
       w = weights.shape[-1]
       w_offset = 3 if not self.centered else 1
@@ -135,7 +136,7 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # Core Functional Logic
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ComputeSpline(self, input_data, params):
+   def _ComputeSpline(self, input_data: torch.Tensor, params: List[torch.Tensor]) -> torch.Tensor:
       """Calculate knots and apply spline transformation"""
       # Calculate knots
       x, y, w, derivs = self._CalculateKnots(params)
@@ -159,7 +160,7 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # Knots are calculated every time forward() is called
    #////////////////////////////////////////////////////////////////////////////////////
-   def _CalculateKnots(self, params_batched):
+   def _CalculateKnots(self, params_batched: List[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
       """
       Calculate spline knots (x, y, w) and derivatives.
       
@@ -167,12 +168,12 @@ class UnifiedMonotonicSpline(nn.Module):
       Between base knots, we insert midpoints with weights w_m calculated to ensure monotonicity.
       """
       # Unpack parameters
-      x_pos_raw, x_neg_raw, y_pos_raw, y_neg_raw, ln_d_raw = params_batched[:5]
+      x_pos_raw, x_neg_raw, y_pos_raw, y_neg_raw, ln_d_raw = params_batched[0], params_batched[1], params_batched[2], params_batched[3], params_batched[4]
       
       b = x_pos_raw.shape[0]
       device = x_pos_raw.device
       dtype = x_pos_raw.dtype
-      eps_train = EpsForDtype(dtype)
+      eps_train = EpsForDtype(dtype, False)
       n = y_pos_raw.shape[-1]
       
       # Phase 1: Calculate spacings, weights, and intermediate points
@@ -253,10 +254,10 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # After getting the knots, computing the spline itself
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ApplySpline(self, v_in, x, y, w, derivs):
+   def _ApplySpline(self, v_in: torch.Tensor, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor, derivs: torch.Tensor) -> torch.Tensor:
       """Apply spline transformation to input values"""
       is_batched = (x.dim() > 1)
-      eps_eval = EpsForDtype(v_in.dtype)
+      eps_eval = EpsForDtype(v_in.dtype, False)
       
       # Handle direction for forward pass
       if not self.inverse and self.direction_multiplier < 0:
@@ -267,21 +268,21 @@ class UnifiedMonotonicSpline(nn.Module):
       indices = torch.searchsorted(search_target, v_in)
       indices = torch.clamp(indices, min=1, max=search_target.shape[-1]-1).long()
       
-      # Define gathering mechanism
+      # Gather knot values - inline the gather operations
       if is_batched:
-         def gather(tensor, idx):
-            return torch.gather(tensor, dim=-1, index=idx)
+         w_k = torch.gather(w, dim=-1, index=indices - 1)
+         w_k_plus_1 = torch.gather(w, dim=-1, index=indices)
+         x_k = torch.gather(x, dim=-1, index=indices - 1)
+         x_k_plus_1 = torch.gather(x, dim=-1, index=indices)
+         y_k = torch.gather(y, dim=-1, index=indices - 1)
+         y_k_plus_1 = torch.gather(y, dim=-1, index=indices)
       else:
-         def gather(tensor, idx):
-            return tensor[idx]
-      
-      # Gather knot values
-      w_k = gather(w, indices - 1)
-      w_k_plus_1 = gather(w, indices)
-      x_k = gather(x, indices - 1)
-      x_k_plus_1 = gather(x, indices)
-      y_k = gather(y, indices - 1)
-      y_k_plus_1 = gather(y, indices)
+         w_k = w[indices - 1]
+         w_k_plus_1 = w[indices]
+         x_k = x[indices - 1]
+         x_k_plus_1 = x[indices]
+         y_k = y[indices - 1]
+         y_k_plus_1 = y[indices]
       
       # Barycentric interpolation
       if self.inverse:
@@ -347,7 +348,8 @@ class UnifiedMonotonicSpline(nn.Module):
             np.savetxt(f, x.reshape(1, -1), delimiter="\t")
 
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+# Parameter Extraction from a model in Mode 1 for use in Mode 2
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 def ExtractParamsForExternal(model):
    """Extract parameters from Mode 1 model for Mode 2 usage"""
    if not model.use_internal_params:
