@@ -26,7 +26,7 @@ def NonCenteredTarget(x): return (x-3.)**3 + 5.
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 def TrainSplineMode1(target_func, title, device, n_nodes=8, epochs=3000, lr=0.01, 
-                    x_range=(-3, 3), inverse=False, direction='increasing', centered=True):
+                     x_range=(-3, 3), inverse=False, direction='increasing', centered=True):
    print(f"\n--- Training Mode 1 (Inv={inverse}, Dir={direction}, Centered={centered}) for {title} ---")
    torch.manual_seed(42)
    
@@ -84,9 +84,9 @@ def EvaluateAndPlot(ax, model, target_func, title, x_range, device):
          x_to_plot, y_to_plot = x_plot, y_pred_plot
    
    ax.plot(x_plot.cpu().numpy(), y_true_plot.cpu().numpy(), 
-          label='True Function', color='blue', linewidth=2, alpha=0.6)
+           label='True Function', color='blue', linewidth=2, alpha=0.6)
    ax.plot(x_to_plot.cpu().numpy(), y_to_plot.cpu().numpy(), 
-          label='Spline Approximation', color='red', linestyle='--', linewidth=2)
+           label='Spline Approximation', color='red', linestyle='--', linewidth=2)
    ax.set_title(title)
    ax.legend()
    ax.grid(True)
@@ -112,8 +112,8 @@ def TestMode2Roundtrip(trained_model, device):
    spline_mode2_equivalent.eval()
    trained_model.eval()
    
-   y_pred_mode2 = spline_mode2_equivalent(x_test, params_batch)
    with torch.no_grad():
+      y_pred_mode2 = spline_mode2_equivalent(x_test, params_batch)
       y_pred_mode1 = trained_model(x_test)
    
    match = torch.allclose(y_pred_mode2, y_pred_mode1, atol=1e-6)
@@ -127,12 +127,114 @@ def TestMode2Roundtrip(trained_model, device):
    params_batch_rt = params.repeat(50, 1)
    
    spline_mode2_opposite.eval()
-   y_transformed = spline_mode2_equivalent(x_test_rt, params_batch_rt)
-   x_recovered = spline_mode2_opposite(y_transformed, params_batch_rt)
+   with torch.no_grad():
+      y_transformed = spline_mode2_equivalent(x_test_rt, params_batch_rt)
+      x_recovered = spline_mode2_opposite(y_transformed, params_batch_rt)
    
    match = torch.allclose(x_test_rt, x_recovered, atol=1e-4)
    max_diff = torch.max(torch.abs(x_test_rt - x_recovered)).item()
    print(f"Roundtrip accurate: {match}. Max diff: {max_diff:.6f}")
+   assert match, "Roundtrip failed"
+
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+# Test Function for Derivatives
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+def TestDerivatives(model, device, x_range=(-3, 3)):
+   """Test analytical derivatives against autograd and verify F'(x)*H'(y)=1."""
+   
+   if not model.use_internal_params:
+      # These tests rely on internal parameters for setup and comparison.
+      return
+
+   direction_str = 'Increasing' if model.direction_multiplier > 0 else 'Decreasing'
+   print(f"\nTesting Derivatives: Dir={direction_str}, Centered={model.centered}, Inverse={model.inverse}")
+
+   n_samples = 100
+   model.eval()
+
+   # 1. Test analytical vs autograd derivative for the current model configuration
+   print("Testing Analytical vs Autograd derivative.")
+
+   # Determine the input range for testing. This is crucial for inverse models.
+   if model.inverse:
+      # If inverse (H(y)=x), the input is y. We need the range of y values covered by the spline.
+      # We inspect the knots of the internal increasing spline (G).
+      with torch.no_grad():
+         params_list = [model.x_pos, model.x_neg, model.y_pos, model.y_neg, model.ln_d]
+         if not model.centered:
+            params_list.extend([model.x_0, model.y_0])
+         # Ensure parameters are on the correct device before calling internal methods
+         params_list = [p.to(device) for p in params_list]
+            
+         # _CalculateKnots returns the knots of G.
+         _, y_knots, _, _ = model._CalculateKnots(params_list)
+         y_min = y_knots.min().item()
+         y_max = y_knots.max().item()
+
+      # Input y covers the range of G(x), plus some extrapolation room.
+      input_test = torch.linspace(y_min - 1.0, y_max + 1.0, n_samples).reshape(-1, 1).to(device)
+      
+   else:
+      # If forward (F(x)=y), the input is x. We use the provided x_range plus extrapolation room.
+      input_test = torch.linspace(x_range[0]-0.5, x_range[1]+0.5, n_samples).reshape(-1, 1).to(device)
+
+   # Create a version for autograd testing
+   input_test_grad = input_test.clone().detach().requires_grad_(True)
+
+   # Analytical derivative (using the new Deriv method)
+   with torch.no_grad():
+      d_analytical = model.Deriv(input_test)
+
+   # Autograd derivative
+   output = model(input_test_grad)
+   # Calculate d(output)/d(input) using autograd. 
+   output.sum().backward()
+   d_autograd = input_test_grad.grad
+
+   # Compare results
+   # Autograd might accumulate small numerical errors (float32 precision).
+   match = torch.allclose(d_analytical, d_autograd, atol=1e-5)
+   max_diff = torch.max(torch.abs(d_analytical - d_autograd)).item()
+   print(f"Analytical vs Autograd match: {match}. Max diff: {max_diff:.6f}")
+
+   assert match, f"Derivative test failed: Analytical does not match Autograd. Max diff: {max_diff:.6f}"
+
+   # 2. Test relationship between forward and inverse derivatives (F'(x) * H'(y) = 1)
+   # This uses Mode 2 to easily create both forward and inverse splines with the same parameters.
+
+   print("Testing Forward/Inverse derivative relationship (Mode 2 roundtrip).")
+   config = {'n_of_nodes': None, 'direction': model.direction_multiplier, 'centered': model.centered}
+   spline_forward = UnifiedMonotonicSpline(**config, inverse=False).to(device)
+   spline_inverse = UnifiedMonotonicSpline(**config, inverse=True).to(device)
+   params = ExtractParamsForExternal(model)
+
+   # We test this relationship using inputs 'x' in the forward direction.
+   x_test_rel = torch.linspace(x_range[0]-0.5, x_range[1]+0.5, n_samples).reshape(-1, 1).to(device)
+   params_batch = params.repeat(n_samples, 1)
+
+   spline_forward.eval()
+   spline_inverse.eval()
+
+   with torch.no_grad():
+      # Calculate forward derivative F'(x)
+      dy_dx = spline_forward.Deriv(x_test_rel, params_batch)
+
+      # Calculate corresponding y values F(x)
+      y_test_rel = spline_forward(x_test_rel, params_batch)
+
+      # Calculate inverse derivative H'(y) at y values
+      dx_dy = spline_inverse.Deriv(y_test_rel, params_batch)
+
+   # Check if F'(x) * H'(y) = 1
+   product = dy_dx * dx_dy
+   target = torch.ones_like(product)
+
+   # Use a slightly higher tolerance as numerical errors might accumulate.
+   match = torch.allclose(product, target, atol=1e-4)
+   max_diff = torch.max(torch.abs(product - target)).item()
+   print(f"F'(x) * H'(y) == 1: {match}. Max diff: {max_diff:.6f}")
+
+   assert match, f"Derivative relationship test failed: F'(x) * H'(y) != 1. Max diff: {max_diff:.6f}"
 
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -187,7 +289,7 @@ def TestTrainingGradients(device, n_nodes=5, centered=True, direction=1):
       assert has_x0_grad and has_y0_grad, "No gradient for center parameters"
 
 ##################################################################################################################################################
-# Main Program
+# Main 
 ##################################################################################################################################################
 if __name__ == '__main__':
    device = torch.device("cpu")
@@ -212,6 +314,8 @@ if __name__ == '__main__':
    model_inverse_decreasing.SaveSplineWeights("spline_inverse_decreasing.txt")
    
    models = [model_tanh, model_decreasing, model_non_centered, model_inverse, model_inverse_decreasing]
+   # Corresponding X ranges used during training (relevant for derivative tests)
+   ranges = [(-3, 3), (-3, 3), (-4, 7), (-2, 2), (-2, 2)]
    
    # Run tests
    print("\n" + "="*60)
@@ -220,8 +324,15 @@ if __name__ == '__main__':
    for model in models:
       if model: TestMode2Roundtrip(model, device)
    
+   # New Test Group for Derivatives
    print("\n" + "="*60)
-   print("Test Group 2: Gradient Flow")
+   print("Test Group 2: Derivatives (Analytical vs Autograd and F' * H' = 1)")
+   print("="*60)
+   for model, x_range in zip(models, ranges):
+      if model: TestDerivatives(model, device, x_range)
+
+   print("\n" + "="*60)
+   print("Test Group 3: Gradient Flow (Mode 2 Training)")
    print("="*60)
    TestTrainingGradients(device, n_nodes=5, centered=True, direction=1)
    TestTrainingGradients(device, n_nodes=5, centered=False, direction=1)

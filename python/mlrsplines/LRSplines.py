@@ -70,11 +70,10 @@ class UnifiedMonotonicSpline(nn.Module):
          self.y_0 = nn.Parameter(torch.zeros(1, 1, dtype=torch.float32))
    
    #////////////////////////////////////////////////////////////////////////////////////
-
-   def forward(self, input_data, spline_weights=None):
-      if input_data.numel() == 0:
-         return input_data
-      
+   # Common part for forward and Deriv
+   #////////////////////////////////////////////////////////////////////////////////////
+   def _PrepareParams(self, input_data, spline_weights):
+      """Helper to handle parameter sourcing for both forward and Deriv."""
       # Parameter sourcing
       if self.use_internal_params:
          if spline_weights is not None:
@@ -103,8 +102,27 @@ class UnifiedMonotonicSpline(nn.Module):
             raise ValueError(f'Weights dimensionality must be {center_str} (n>=1). Got: {w}')
          
          params = self._ParseExternalWeights(weights_reshaped)
+      return params
+
+   #////////////////////////////////////////////////////////////////////////////////////
+
+   def forward(self, input_data, spline_weights=None):
+      if input_data.numel() == 0:
+         return input_data
       
-      return self._ComputeSpline(input_data, params)
+      params = self._PrepareParams(input_data, spline_weights)
+      return self._ComputeSpline(input_data, params, calc_deriv=False)
+
+   #////////////////////////////////////////////////////////////////////////////////////
+   # Derivative calculation
+   #////////////////////////////////////////////////////////////////////////////////////
+   def Deriv(self, input_data, spline_weights=None):
+      """Calculates the derivative of the spline (or inverse spline) wrt the input."""
+      if input_data.numel() == 0:
+         return input_data
+      
+      params = self._PrepareParams(input_data, spline_weights)
+      return self._ComputeSpline(input_data, params, calc_deriv=True)
    
    #////////////////////////////////////////////////////////////////////////////////////
    # In Mode 2 we need to unpack parameters being sent in
@@ -136,8 +154,8 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # Core Functional Logic
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ComputeSpline(self, input_data: torch.Tensor, params: List[torch.Tensor]) -> torch.Tensor:
-      """Calculate knots and apply spline transformation"""
+   def _ComputeSpline(self, input_data: torch.Tensor, params: List[torch.Tensor], calc_deriv: bool = False) -> torch.Tensor:
+      """Calculate knots and apply spline transformation (or derivative)"""
       # Calculate knots
       x, y, w, derivs = self._CalculateKnots(params)
       
@@ -154,7 +172,7 @@ class UnifiedMonotonicSpline(nn.Module):
          v_in = input_data.reshape(b_proc, orig_shape[-1])
          x_app, y_app, w_app, derivs_app = x, y, w, derivs
       
-      output = self._ApplySpline(v_in, x_app, y_app, w_app, derivs_app)
+      output = self._ApplySpline(v_in, x_app, y_app, w_app, derivs_app, calc_deriv)
       return output.reshape(orig_shape)
    
    #////////////////////////////////////////////////////////////////////////////////////
@@ -210,7 +228,7 @@ class UnifiedMonotonicSpline(nn.Module):
       base_spacings_x = torch.cat([base_spacings_x_neg, base_spacings_x_pos], dim=-1)
       base_spacings_y = torch.cat([y_neg_exp, y_pos_exp], dim=-1)
       
-      # w_m = (?*w_p*d_p + (1-?)*w_n*d_n) * ?x / ?y
+      # w_m = (lambda*w_p*d_p + (1-lambda)*w_n*d_n) * Delta_x / Delta_y
       num_w_m = lambdas * w_prev * d_prev + o_lambdas * w_next * d_next
       w_m = num_w_m * base_spacings_x / base_spacings_y.clamp(min=eps_train)
       
@@ -254,12 +272,12 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # After getting the knots, computing the spline itself
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ApplySpline(self, v_in: torch.Tensor, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor, derivs: torch.Tensor) -> torch.Tensor:
-      """Apply spline transformation to input values"""
+   def _ApplySpline(self, v_in: torch.Tensor, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor, derivs: torch.Tensor, calc_deriv: bool = False) -> torch.Tensor:
+      """Apply spline transformation or calculate derivative to input values"""
       is_batched = (x.dim() > 1)
       eps_eval = EpsForDtype(v_in.dtype, False)
       
-      # Handle direction for forward pass
+      # Input transformation (Handle direction for forward pass input): g_out(x) = g_spline(s*x) where s is direction_multiplier
       if not self.inverse and self.direction_multiplier < 0:
          v_in = -v_in
       
@@ -268,7 +286,7 @@ class UnifiedMonotonicSpline(nn.Module):
       indices = torch.searchsorted(search_target, v_in)
       indices = torch.clamp(indices, min=1, max=search_target.shape[-1]-1).long()
       
-      # Gather knot values - inline the gather operations
+      # Gather knot values
       if is_batched:
          w_k = torch.gather(w, dim=-1, index=indices - 1)
          w_k_plus_1 = torch.gather(w, dim=-1, index=indices)
@@ -284,17 +302,34 @@ class UnifiedMonotonicSpline(nn.Module):
          y_k = y[indices - 1]
          y_k_plus_1 = y[indices]
       
-      # Barycentric interpolation
+      # Calculate interpolation weights (v1, v2) and Denominator (S or S')
       if self.inverse:
+         # Inverse: S' = W_{k+1}(Y_{k+1}-y) + W_k(y-Y_k)
          v1 = w_k_plus_1 * (y_k_plus_1 - v_in)
          v2 = w_k * (v_in - y_k)
-         res = (x_k*v1 + x_k_plus_1*v2) / torch.clip(v1 + v2, min=eps_eval)
       else:
+         # Forward: S = W_k(X_{k+1}-x) + W_{k+1}(x-X_k)
          v1 = w_k * (x_k_plus_1 - v_in)
          v2 = w_k_plus_1 * (v_in - x_k)
-         res = (y_k*v1 + y_k_plus_1*v2) / torch.clip(v1 + v2, min=eps_eval)
       
-      # Handle extrapolation
+      denominator = torch.clip(v1 + v2, min=eps_eval)
+
+      if calc_deriv:
+         # Derivative calculation (symmetric formula for increasing spline)
+         # g'(v) = (W_k * W_{k+1} * dY * dX) / S^2
+         numerator = w_k * w_k_plus_1 * (y_k_plus_1 - y_k) * (x_k_plus_1 - x_k)
+         # We rely on the fact that X/Y are strictly increasing and W>0, so numerator >= 0.
+         res = numerator / (denominator * denominator)
+      else:
+         # Value calculation
+         if self.inverse:
+            # res = (X_k*v1 + X_{k+1}*v2) / S'
+            res = (x_k*v1 + x_k_plus_1*v2) / denominator
+         else:
+            # res = (Y_k*v1 + Y_{k+1}*v2) / S
+            res = (y_k*v1 + y_k_plus_1*v2) / denominator
+      
+      # Handle extrapolation (Tails)
       if is_batched:
          x_left = x[..., 0:1]; x_right = x[..., -1:]
          y_left = y[..., 0:1]; y_right = y[..., -1:]
@@ -306,13 +341,23 @@ class UnifiedMonotonicSpline(nn.Module):
       
       # Linear extrapolation beyond boundaries
       if self.inverse:
-         res_from_left = x_left + (v_in - y_left) / torch.clip(d_left, min=eps_eval)
-         res_from_right = x_right + (v_in - y_right) / torch.clip(d_right, min=eps_eval)
+         d_left_inv = 1.0 / torch.clip(d_left, min=eps_eval)
+         d_right_inv = 1.0 / torch.clip(d_right, min=eps_eval)
+         if calc_deriv:
+            res_from_left = d_left_inv
+            res_from_right = d_right_inv
+         else:
+            res_from_left = x_left + (v_in - y_left) * d_left_inv
+            res_from_right = x_right + (v_in - y_right) * d_right_inv
          mask_target_min = y_left
          mask_target_max = y_right
       else:
-         res_from_left = y_left + (v_in - x_left) * d_left
-         res_from_right = y_right + (v_in - x_right) * d_right
+         if calc_deriv:
+            res_from_left = d_left
+            res_from_right = d_right
+         else:
+            res_from_left = y_left + (v_in - x_left) * d_left
+            res_from_right = y_right + (v_in - x_right) * d_right
          mask_target_min = x_left
          mask_target_max = x_right
       
@@ -322,8 +367,15 @@ class UnifiedMonotonicSpline(nn.Module):
       mask_inside_max = mask_target_max > v_in
       res = torch.where(mask_inside_max, res, res_from_right)
       
-      if self.inverse and self.direction_multiplier < 0:
-         res = -res
+      # Finalization (Handle direction multiplier for output)
+      if calc_deriv:
+         # Chain rule: multiply by direction multiplier (s). F'(x) = G'(s*x)*s. H'(y) = s*(G^-1)'(y).
+         if self.direction_multiplier < 0:
+            res = -res
+      else:
+         # Value finalization (Inverse case: H(y) = s*G^-1(y))
+         if self.inverse and self.direction_multiplier < 0:
+            res = -res
       return res
    
    #////////////////////////////////////////////////////////////////////////////////////
