@@ -127,6 +127,9 @@
   <ItemGroup>
     <ClCompile Include="..\tests\TestLRSplines.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\mlrsplines\LRSplines.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

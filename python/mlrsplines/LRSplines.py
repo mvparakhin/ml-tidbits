@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import math
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 import numpy as np
 
 ##################################################################################################################################################
@@ -33,7 +33,17 @@ class UnifiedMonotonicSpline(nn.Module):
       direction (str or int): 'increasing' (1) or 'decreasing' (-1).
       centered (bool): If True (default), spline passes through (0,0). If False, center (x_0, y_0) is learned.
    """
-   def __init__(self, n_of_nodes=None, inverse=False, direction='increasing', centered=True):
+   # Class-level type annotations for TorchScript compatibility
+   direction_multiplier: float
+   x_pos: Optional[torch.Tensor]
+   x_neg: Optional[torch.Tensor]
+   y_pos: Optional[torch.Tensor]
+   y_neg: Optional[torch.Tensor]
+   ln_d: Optional[torch.Tensor]
+   x_0: Optional[torch.Tensor]
+   y_0: Optional[torch.Tensor]
+   
+   def __init__(self, n_of_nodes: Optional[int] = None, inverse: bool = False, direction: Union[str, int] = 'increasing', centered: bool = True):
       super(UnifiedMonotonicSpline, self).__init__()
       self.n_of_nodes_internal = n_of_nodes
       self.inverse = inverse
@@ -48,14 +58,26 @@ class UnifiedMonotonicSpline(nn.Module):
       else:
          raise ValueError("direction must be 'increasing' (1) or 'decreasing' (-1)")
       
+      # Initialize all potential attributes for TorchScript compatibility
+      self.x_pos = None
+      self.x_neg = None
+      self.y_pos = None
+      self.y_neg = None
+      self.ln_d = None
+      self.x_0 = None
+      self.y_0 = None
+
       if self.use_internal_params:
+         if n_of_nodes is None:
+            # Should be unreachable, but helps TorchScript narrow the type
+            raise ValueError("Internal error: n_of_nodes is None despite use_internal_params being True.")
          if n_of_nodes < 1:
             raise ValueError("n_of_nodes must be >= 1")
          self._InitInternalParams(n_of_nodes)
    
    #////////////////////////////////////////////////////////////////////////////////////
 
-   def _InitInternalParams(self, n):
+   def _InitInternalParams(self, n: int):
       """Initialize parameters with leading batch dimension (B=1)"""
       init_val = math.log(0.5)
       
@@ -72,57 +94,89 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # Common part for forward and Deriv
    #////////////////////////////////////////////////////////////////////////////////////
-   def _PrepareParams(self, input_data, spline_weights):
+   def _PrepareParams(self, input_data: torch.Tensor, spline_weights: Optional[torch.Tensor]) -> List[torch.Tensor]:
       """Helper to handle parameter sourcing for both forward and Deriv."""
       # Parameter sourcing
       if self.use_internal_params:
          if spline_weights is not None:
             raise ValueError("Spline initialized with internal nodes; do not provide external weights")
-         params = [self.x_pos, self.x_neg, self.y_pos, self.y_neg, self.ln_d]
+
+         # Unwrap optional tensors to get non-optional tensors
+         x_pos_unwrapped = torch.jit._unwrap_optional(self.x_pos)
+         x_neg_unwrapped = torch.jit._unwrap_optional(self.x_neg)
+         y_pos_unwrapped = torch.jit._unwrap_optional(self.y_pos)
+         y_neg_unwrapped = torch.jit._unwrap_optional(self.y_neg)
+         ln_d_unwrapped = torch.jit._unwrap_optional(self.ln_d)
+
+         params: List[torch.Tensor] = [x_pos_unwrapped, x_neg_unwrapped, y_pos_unwrapped, y_neg_unwrapped, ln_d_unwrapped]
+         
          if not self.centered:
-            params.extend([self.x_0, self.y_0])
+            x_0_tensor = torch.jit._unwrap_optional(self.x_0)
+            y_0_tensor = torch.jit._unwrap_optional(self.y_0)
+            params.extend([x_0_tensor, y_0_tensor])
+         return params
       else:
          if spline_weights is None:
             raise ValueError("Spline initialized for external weights; must provide spline_weights")
          
-         w = spline_weights.shape[-1]
-         leading_input_shape = input_data.shape[:-1]
-         b_flat = torch.prod(torch.tensor(leading_input_shape)).item() if input_data.ndim > 1 else 1
+         # Scriptable shape handling for Mode 2
+         if input_data.ndim < 1:
+            raise ValueError("Input data must be at least 1-dimensional.")
+
+         # Calculate flattened batch dimension of input (B_flat)
+         b_flat = input_data.numel() // input_data.shape[-1]
          
+         w = spline_weights.shape[-1]
+
+         if spline_weights.ndim < 1:
+            raise ValueError("Spline weights must be at least 1-dimensional.")
+
+         # Calculate flattened batch dimension of weights
+         b_flat_weights = spline_weights.numel() // w
+
          # Shape validation and reshaping
-         if spline_weights.shape[:-1] == leading_input_shape or (spline_weights.ndim >= 2 and torch.prod(torch.tensor(spline_weights.shape[:-1])).item() == b_flat):
+         leading_input_sizes = input_data.shape[:-1]
+         leading_weight_sizes = spline_weights.shape[:-1]
+
+         if leading_weight_sizes == leading_input_sizes or b_flat_weights == b_flat:
             weights_reshaped = spline_weights.reshape(b_flat, w)
          else:
-            raise ValueError(f'External weights shape {spline_weights.shape} incompatible with input leading dims {leading_input_shape}')
+            raise ValueError('External weights shape incompatible with input leading dimensions.')
          
          # Validate W (8N+1 or 8N+3 if non-centered)
          w_offset = 3 if not self.centered else 1
          if w % 2 != 1 or (w - w_offset) < 8 or (w - w_offset) % 8 != 0:
-            center_str = "8*n + 3" if not self.centered else "8*n + 1"
-            raise ValueError(f'Weights dimensionality must be {center_str} (n>=1). Got: {w}')
+            raise ValueError('Weights dimensionality validation failed (must be 8*n+1 or 8*n+3).')
          
          params = self._ParseExternalWeights(weights_reshaped)
-      return params
+         return params
 
    #////////////////////////////////////////////////////////////////////////////////////
-
-   def forward(self, input_data, spline_weights=None):
+   # forward always returns a Tuple for scriptability.
+   #////////////////////////////////////////////////////////////////////////////////////
+   def forward(self, input_data: torch.Tensor, spline_weights: Optional[torch.Tensor] = None, return_deriv: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
       if input_data.numel() == 0:
-         return input_data
+         # Return (empty_value, empty_derivative)
+         return input_data, torch.empty_like(input_data)
       
       params = self._PrepareParams(input_data, spline_weights)
-      return self._ComputeSpline(input_data, params, calc_deriv=False)
+      
+      # Call the internal computation method. Always request value; optionally request derivative.
+      return self._ComputeSpline(input_data, params, calc_value=True, calc_deriv=return_deriv)
 
    #////////////////////////////////////////////////////////////////////////////////////
    # Derivative calculation
    #////////////////////////////////////////////////////////////////////////////////////
-   def Deriv(self, input_data, spline_weights=None):
+   def Deriv(self, input_data: torch.Tensor, spline_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
       """Calculates the derivative of the spline (or inverse spline) wrt the input."""
       if input_data.numel() == 0:
          return input_data
       
       params = self._PrepareParams(input_data, spline_weights)
-      return self._ComputeSpline(input_data, params, calc_deriv=True)
+      
+      # Call the internal computation method, requesting only the derivative.
+      _, deriv = self._ComputeSpline(input_data, params, calc_value=False, calc_deriv=True)
+      return deriv
    
    #////////////////////////////////////////////////////////////////////////////////////
    # In Mode 2 we need to unpack parameters being sent in
@@ -154,9 +208,9 @@ class UnifiedMonotonicSpline(nn.Module):
    #////////////////////////////////////////////////////////////////////////////////////
    # Core Functional Logic
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ComputeSpline(self, input_data: torch.Tensor, params: List[torch.Tensor], calc_deriv: bool = False) -> torch.Tensor:
+   def _ComputeSpline(self, input_data: torch.Tensor, params: List[torch.Tensor], calc_value: bool, calc_deriv: bool) -> Tuple[torch.Tensor, torch.Tensor]:
       """Calculate knots and apply spline transformation (or derivative)"""
-      # Calculate knots
+      # Calculate knots (Shared computation)
       x, y, w, derivs = self._CalculateKnots(params)
       
       # Prepare inputs for application
@@ -172,8 +226,21 @@ class UnifiedMonotonicSpline(nn.Module):
          v_in = input_data.reshape(b_proc, orig_shape[-1])
          x_app, y_app, w_app, derivs_app = x, y, w, derivs
       
-      output = self._ApplySpline(v_in, x_app, y_app, w_app, derivs_app, calc_deriv)
-      return output.reshape(orig_shape)
+      # Call the scriptable application logic
+      val_out, deriv_out = self._ApplySpline(v_in, x_app, y_app, w_app, derivs_app, calc_value, calc_deriv)
+      
+      # Handle reshaping and empty tensor returns for scriptability consistency
+      if calc_value:
+         val_reshaped = val_out.reshape(orig_shape)
+      else:
+         val_reshaped = torch.zeros(0, dtype=input_data.dtype, device=input_data.device)
+
+      if calc_deriv:
+         deriv_reshaped = deriv_out.reshape(orig_shape)
+      else:
+         deriv_reshaped = torch.zeros(0, dtype=input_data.dtype, device=input_data.device)
+         
+      return val_reshaped, deriv_reshaped
    
    #////////////////////////////////////////////////////////////////////////////////////
    # Knots are calculated every time forward() is called
@@ -191,7 +258,7 @@ class UnifiedMonotonicSpline(nn.Module):
       b = x_pos_raw.shape[0]
       device = x_pos_raw.device
       dtype = x_pos_raw.dtype
-      eps_train = EpsForDtype(dtype, False)
+      eps_train = 1e-6
       n = y_pos_raw.shape[-1]
       
       # Phase 1: Calculate spacings, weights, and intermediate points
@@ -229,7 +296,10 @@ class UnifiedMonotonicSpline(nn.Module):
       base_spacings_y = torch.cat([y_neg_exp, y_pos_exp], dim=-1)
       
       # w_m = (lambda*w_p*d_p + (1-lambda)*w_n*d_n) * Delta_x / Delta_y
-      num_w_m = lambdas * w_prev * d_prev + o_lambdas * w_next * d_next
+      # Optimization: Use identity w*d = 1/w.
+      # Original: num_w_m = lambdas * w_prev * d_prev + o_lambdas * w_next * d_next
+      # Optimized: num_w_m = lambdas / w_prev + o_lambdas / w_next
+      num_w_m = lambdas / w_prev + o_lambdas / w_next
       w_m = num_w_m * base_spacings_x / base_spacings_y.clamp(min=eps_train)
       
       # Calculate cumulative positions from spacings
@@ -255,11 +325,20 @@ class UnifiedMonotonicSpline(nn.Module):
       w[..., ::2] = w_base
       w[..., 1::2] = w_m
       
-      # Assemble y coordinates (asymmetric interleaving for neg/pos sides)
+      # Assemble y coordinates using indexed assignment for efficiency
       y_m_neg, y_m_pos = y_m[..., :n], y_m[..., n:]
-      y_neg_i = torch.stack([y_neg, y_m_neg], dim=-1).view(b, 2*n)  # Base, Mid
-      y_pos_i = torch.stack([y_m_pos, y_pos], dim=-1).view(b, 2*n)  # Mid, Base
-      y = torch.cat([y_neg_i, zero_tensor, y_pos_i], dim=-1)
+
+      y = torch.empty((b, 4*n + 1), device=device, dtype=dtype)
+      # Center point Y_0 (Index 2N). Initialize to 0 (offset applied later if non-centered).
+      y[..., 2*n] = 0.
+      
+      # Negative side (Indices 0 to 2N-1)
+      y[..., 0:2*n:2] = y_neg     # Base knots
+      y[..., 1:2*n:2] = y_m_neg   # Mid knots
+      
+      # Positive side (Indices 2N+1 to 4N)
+      y[..., 2*n+1::2] = y_m_pos  # Mid knots
+      y[..., 2*n+2::2] = y_pos    # Base knots
       
       # Apply centering if needed
       if not self.centered:
@@ -270,23 +349,23 @@ class UnifiedMonotonicSpline(nn.Module):
       return x, y, w, derivs
    
    #////////////////////////////////////////////////////////////////////////////////////
-   # After getting the knots, computing the spline itself
+   # After getting the knots, computing the spline itself (Scriptable Core)
    #////////////////////////////////////////////////////////////////////////////////////
-   def _ApplySpline(self, v_in: torch.Tensor, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor, derivs: torch.Tensor, calc_deriv: bool = False) -> torch.Tensor:
-      """Apply spline transformation or calculate derivative to input values"""
+   def _ApplySpline(self, v_in: torch.Tensor, x: torch.Tensor, y: torch.Tensor, w: torch.Tensor, derivs: torch.Tensor, calc_value: bool, calc_deriv: bool) -> Tuple[torch.Tensor, torch.Tensor]:
+      """Apply spline transformation and/or calculate derivative in a scriptable manner."""
       is_batched = (x.dim() > 1)
-      eps_eval = EpsForDtype(v_in.dtype, False)
+      eps_eval = 1e-6
       
       # Input transformation (Handle direction for forward pass input): g_out(x) = g_spline(s*x) where s is direction_multiplier
       if not self.inverse and self.direction_multiplier < 0:
          v_in = -v_in
       
-      # Find bins using binary search
+      # Find bins using binary search (Shared computation)
       search_target = y if self.inverse else x
       indices = torch.searchsorted(search_target, v_in)
       indices = torch.clamp(indices, min=1, max=search_target.shape[-1]-1).long()
       
-      # Gather knot values
+      # Gather knot values (Shared computation)
       if is_batched:
          w_k = torch.gather(w, dim=-1, index=indices - 1)
          w_k_plus_1 = torch.gather(w, dim=-1, index=indices)
@@ -302,7 +381,7 @@ class UnifiedMonotonicSpline(nn.Module):
          y_k = y[indices - 1]
          y_k_plus_1 = y[indices]
       
-      # Calculate interpolation weights (v1, v2) and Denominator (S or S')
+      # Calculate interpolation weights (v1, v2) and Denominator (S or S') (Shared computation)
       if self.inverse:
          # Inverse: S' = W_{k+1}(Y_{k+1}-y) + W_k(y-Y_k)
          v1 = w_k_plus_1 * (y_k_plus_1 - v_in)
@@ -311,72 +390,108 @@ class UnifiedMonotonicSpline(nn.Module):
          # Forward: S = W_k(X_{k+1}-x) + W_{k+1}(x-X_k)
          v1 = w_k * (x_k_plus_1 - v_in)
          v2 = w_k_plus_1 * (v_in - x_k)
-      
+
       denominator = torch.clip(v1 + v2, min=eps_eval)
 
-      if calc_deriv:
-         # Derivative calculation (symmetric formula for increasing spline)
-         # g'(v) = (W_k * W_{k+1} * dY * dX) / S^2
-         numerator = w_k * w_k_plus_1 * (y_k_plus_1 - y_k) * (x_k_plus_1 - x_k)
-         # We rely on the fact that X/Y are strictly increasing and W>0, so numerator >= 0.
-         res = numerator / (denominator * denominator)
-      else:
-         # Value calculation
-         if self.inverse:
-            # res = (X_k*v1 + X_{k+1}*v2) / S'
-            res = (x_k*v1 + x_k_plus_1*v2) / denominator
-         else:
-            # res = (Y_k*v1 + Y_{k+1}*v2) / S
-            res = (y_k*v1 + y_k_plus_1*v2) / denominator
+      # Optimization: Reorganize interpolation using FMA structure (A + w*B).
+      # Let beta = v2 / denominator. res = Y_k + beta*(Y_{k+1}-Y_k).
+      beta = v2 / denominator
+
+      # Initialize interpolation result variables as Tensors (required for TorchScript).
+      res_val_interp = torch.zeros_like(denominator)
+      res_deriv_interp = torch.zeros_like(denominator)
+
+      # Calculate deltas (dY, dX) if needed. Initialize for TorchScript type stability.
+      delta_x = torch.zeros_like(denominator)
+      delta_y = torch.zeros_like(denominator)
       
-      # Handle extrapolation (Tails)
+      if calc_value or calc_deriv:
+         delta_x = x_k_plus_1 - x_k
+         delta_y = y_k_plus_1 - y_k
+
+      # Calculate interpolation results conditionally.
+      if calc_value:
+         # Value calculation using FMA structure
+         if self.inverse:
+            # res = X_k + beta * dX
+            res_val_interp = x_k + beta * delta_x
+         else:
+            # res = Y_k + beta * dY
+            res_val_interp = y_k + beta * delta_y
+
+      if calc_deriv:
+         # Derivative calculation: g'(v) = (W_k * W_{k+1} * dY * dX) / S^2
+         numerator = w_k * w_k_plus_1 * delta_y * delta_x
+         res_deriv_interp = numerator / (denominator * denominator)
+      
+      # Handle extrapolation (Tails) (Shared setup)
+      # Use slicing [0:1] and [-1:] to maintain dimensionality, which is safer for TorchScript broadcasting.
       if is_batched:
          x_left = x[..., 0:1]; x_right = x[..., -1:]
          y_left = y[..., 0:1]; y_right = y[..., -1:]
          d_left = derivs[..., 0:1]; d_right = derivs[..., -1:]
       else:
-         x_left = x[0]; x_right = x[-1]
-         y_left = y[0]; y_right = y[-1]
-         d_left = derivs[0]; d_right = derivs[-1]
+         x_left = x[0:1]; x_right = x[-1:]
+         y_left = y[0:1]; y_right = y[-1:]
+         d_left = derivs[0:1]; d_right = derivs[-1:]
+      
+      # Initialize extrapolation variables as Tensors.
+      res_val_from_left = torch.zeros_like(v_in)
+      res_val_from_right = torch.zeros_like(v_in)
+      res_deriv_from_left = torch.zeros_like(v_in)
+      res_deriv_from_right = torch.zeros_like(v_in)
       
       # Linear extrapolation beyond boundaries
       if self.inverse:
          d_left_inv = 1.0 / torch.clip(d_left, min=eps_eval)
          d_right_inv = 1.0 / torch.clip(d_right, min=eps_eval)
          if calc_deriv:
-            res_from_left = d_left_inv
-            res_from_right = d_right_inv
-         else:
-            res_from_left = x_left + (v_in - y_left) * d_left_inv
-            res_from_right = x_right + (v_in - y_right) * d_right_inv
+            res_deriv_from_left = d_left_inv.expand_as(v_in)
+            res_deriv_from_right = d_right_inv.expand_as(v_in)
+         if calc_value:
+            res_val_from_left = x_left + (v_in - y_left) * d_left_inv
+            res_val_from_right = x_right + (v_in - y_right) * d_right_inv
          mask_target_min = y_left
          mask_target_max = y_right
       else:
          if calc_deriv:
-            res_from_left = d_left
-            res_from_right = d_right
-         else:
-            res_from_left = y_left + (v_in - x_left) * d_left
-            res_from_right = y_right + (v_in - x_right) * d_right
+            res_deriv_from_left = d_left.expand_as(v_in)
+            res_deriv_from_right = d_right.expand_as(v_in)
+         if calc_value:
+            res_val_from_left = y_left + (v_in - x_left) * d_left
+            res_val_from_right = y_right + (v_in - x_right) * d_right
          mask_target_min = x_left
          mask_target_max = x_right
       
       # Combine interpolation and extrapolation
+      res_val = torch.zeros_like(v_in)
+      res_deriv = torch.zeros_like(v_in)
+
       mask_inside_min = v_in > mask_target_min
-      res = torch.where(mask_inside_min, res, res_from_left)
+      
+      if calc_value:
+         res_val = torch.where(mask_inside_min, res_val_interp, res_val_from_left)
+      if calc_deriv:
+         res_deriv = torch.where(mask_inside_min, res_deriv_interp, res_deriv_from_left)
+         
       mask_inside_max = mask_target_max > v_in
-      res = torch.where(mask_inside_max, res, res_from_right)
+      if calc_value:
+         res_val = torch.where(mask_inside_max, res_val, res_val_from_right)
+      if calc_deriv:
+         res_deriv = torch.where(mask_inside_max, res_deriv, res_deriv_from_right)
       
       # Finalization (Handle direction multiplier for output)
       if calc_deriv:
          # Chain rule: multiply by direction multiplier (s). F'(x) = G'(s*x)*s. H'(y) = s*(G^-1)'(y).
          if self.direction_multiplier < 0:
-            res = -res
-      else:
+            res_deriv = -res_deriv
+
+      if calc_value:
          # Value finalization (Inverse case: H(y) = s*G^-1(y))
          if self.inverse and self.direction_multiplier < 0:
-            res = -res
-      return res
+            res_val = -res_val
+
+      return res_val, res_deriv
    
    #////////////////////////////////////////////////////////////////////////////////////
    # Exporting to text file (Mode 1 only)
@@ -421,7 +536,13 @@ def ExtractParamsForExternal(model):
    ]
    
    if not model.centered:
-      params_list.append(model.x_0.data.squeeze(0))
-      params_list.append(model.y_0.data.squeeze(0))
+      # Ensure parameters are 1D before concatenation
+      x0_data = model.x_0.data.squeeze(0)
+      y0_data = model.y_0.data.squeeze(0)
+      if x0_data.ndim == 0: x0_data = x0_data.unsqueeze(0)
+      if y0_data.ndim == 0: y0_data = y0_data.unsqueeze(0)
+
+      params_list.append(x0_data)
+      params_list.append(y0_data)
    
    return torch.cat(params_list, dim=-1)

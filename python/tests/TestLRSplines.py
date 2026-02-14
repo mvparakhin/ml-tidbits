@@ -42,12 +42,15 @@ def TrainSplineMode1(target_func, title, device, n_nodes=8, epochs=3000, lr=0.01
    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
    criterion = nn.MSELoss()
    
-   # Training loop
-   model.train()
+   # Script the model for training
+   scripted_model = torch.jit.script(model)
+   
+   # Training loop - use scripted model for training
+   scripted_model.train()
    start_time = time.time()
    for epoch in range(epochs):
       optimizer.zero_grad()
-      output_pred = model(input_train)
+      output_pred, _ = scripted_model(input_train)
       loss = criterion(output_pred, target_train)
       
       if torch.isnan(loss):
@@ -63,8 +66,10 @@ def TrainSplineMode1(target_func, title, device, n_nodes=8, epochs=3000, lr=0.01
    print(f"Training time: {time.time() - start_time:.2f}s. Final Loss: {loss.item():.6f}")
    
    if not centered and model.use_internal_params:
-      print(f"Learned Center: ({model.x_0.item():.4f}, {model.y_0.item():.4f})")
+      if model.x_0 is not None and model.y_0 is not None:
+         print(f"Learned Center: ({model.x_0.item():.4f}, {model.y_0.item():.4f})")
    
+   # Return the original model (not scripted) so SaveSplineWeights can be called
    return model
 
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -77,10 +82,10 @@ def EvaluateAndPlot(ax, model, target_func, title, x_range, device):
    with torch.no_grad():
       if model.inverse:
          y_input_plot = y_true_plot
-         x_pred_plot = model(y_input_plot.to(device))
+         x_pred_plot, _ = model(y_input_plot.to(device))
          x_to_plot, y_to_plot = x_pred_plot, y_input_plot
       else:
-         y_pred_plot = model(x_plot.to(device))
+         y_pred_plot, _ = model(x_plot.to(device))
          x_to_plot, y_to_plot = x_plot, y_pred_plot
    
    ax.plot(x_plot.cpu().numpy(), y_true_plot.cpu().numpy(), 
@@ -113,8 +118,8 @@ def TestMode2Roundtrip(trained_model, device):
    trained_model.eval()
    
    with torch.no_grad():
-      y_pred_mode2 = spline_mode2_equivalent(x_test, params_batch)
-      y_pred_mode1 = trained_model(x_test)
+      y_pred_mode2, _ = spline_mode2_equivalent(x_test, params_batch)
+      y_pred_mode1, _ = trained_model(x_test)
    
    match = torch.allclose(y_pred_mode2, y_pred_mode1, atol=1e-6)
    print(f"Mode 2 matches Mode 1: {match}")
@@ -128,13 +133,28 @@ def TestMode2Roundtrip(trained_model, device):
    
    spline_mode2_opposite.eval()
    with torch.no_grad():
-      y_transformed = spline_mode2_equivalent(x_test_rt, params_batch_rt)
-      x_recovered = spline_mode2_opposite(y_transformed, params_batch_rt)
+      y_transformed, _ = spline_mode2_equivalent(x_test_rt, params_batch_rt)
+      x_recovered, _ = spline_mode2_opposite(y_transformed, params_batch_rt)
    
    match = torch.allclose(x_test_rt, x_recovered, atol=1e-4)
    max_diff = torch.max(torch.abs(x_test_rt - x_recovered)).item()
    print(f"Roundtrip accurate: {match}. Max diff: {max_diff:.6f}")
    assert match, "Roundtrip failed"
+
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+# Helper function to safely extract internal parameters for testing purposes
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+def GetInternalParamsForTest(m):
+   params = []
+   if m.x_pos is not None: params.append(m.x_pos)
+   if m.x_neg is not None: params.append(m.x_neg)
+   if m.y_pos is not None: params.append(m.y_pos)
+   if m.y_neg is not None: params.append(m.y_neg)
+   if m.ln_d is not None: params.append(m.ln_d)
+   if not m.centered:
+      if m.x_0 is not None: params.append(m.x_0)
+      if m.y_0 is not None: params.append(m.y_0)
+   return params
 
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 # Test Function for Derivatives
@@ -158,11 +178,8 @@ def TestDerivatives(model, device, x_range=(-3, 3)):
    # Determine the input range for testing. This is crucial for inverse models.
    if model.inverse:
       # If inverse (H(y)=x), the input is y. We need the range of y values covered by the spline.
-      # We inspect the knots of the internal increasing spline (G).
       with torch.no_grad():
-         params_list = [model.x_pos, model.x_neg, model.y_pos, model.y_neg, model.ln_d]
-         if not model.centered:
-            params_list.extend([model.x_0, model.y_0])
+         params_list = GetInternalParamsForTest(model)
          # Ensure parameters are on the correct device before calling internal methods
          params_list = [p.to(device) for p in params_list]
             
@@ -181,12 +198,12 @@ def TestDerivatives(model, device, x_range=(-3, 3)):
    # Create a version for autograd testing
    input_test_grad = input_test.clone().detach().requires_grad_(True)
 
-   # Analytical derivative (using the new Deriv method)
+   # Analytical derivative (using the Deriv method)
    with torch.no_grad():
       d_analytical = model.Deriv(input_test)
 
    # Autograd derivative
-   output = model(input_test_grad)
+   output, _ = model(input_test_grad)
    # Calculate d(output)/d(input) using autograd. 
    output.sum().backward()
    d_autograd = input_test_grad.grad
@@ -216,11 +233,8 @@ def TestDerivatives(model, device, x_range=(-3, 3)):
    spline_inverse.eval()
 
    with torch.no_grad():
-      # Calculate forward derivative F'(x)
-      dy_dx = spline_forward.Deriv(x_test_rel, params_batch)
-
-      # Calculate corresponding y values F(x)
-      y_test_rel = spline_forward(x_test_rel, params_batch)
+      # Utilize the optimized path: Calculate F(x) and F'(x) simultaneously
+      y_test_rel, dy_dx = spline_forward(x_test_rel, params_batch, return_deriv=True)
 
       # Calculate inverse derivative H'(y) at y values
       dx_dy = spline_inverse.Deriv(y_test_rel, params_batch)
@@ -235,6 +249,151 @@ def TestDerivatives(model, device, x_range=(-3, 3)):
    print(f"F'(x) * H'(y) == 1: {match}. Max diff: {max_diff:.6f}")
 
    assert match, f"Derivative relationship test failed: F'(x) * H'(y) != 1. Max diff: {max_diff:.6f}"
+
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+# Test Function for forward(return_deriv=True)
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+def TestForwardWithDeriv(model, device, x_range=(-3, 3)):
+   """Test the optimized forward pass that returns both value and derivative."""
+   
+   if not model.use_internal_params:
+      return
+
+   direction_str = 'Increasing' if model.direction_multiplier > 0 else 'Decreasing'
+   print(f"\nTesting forward(return_deriv=True): Dir={direction_str}, Centered={model.centered}, Inverse={model.inverse}")
+
+   n_samples = 50
+   model.eval()
+
+   # Determine the input range
+   if model.inverse:
+      with torch.no_grad():
+         params_list = GetInternalParamsForTest(model)
+         params_list = [p.to(device) for p in params_list]
+         _, y_knots, _, _ = model._CalculateKnots(params_list)
+         y_min = y_knots.min().item()
+         y_max = y_knots.max().item()
+      input_test = torch.linspace(y_min - 0.5, y_max + 0.5, n_samples).reshape(-1, 1).to(device)
+   else:
+      input_test = torch.linspace(x_range[0]-0.5, x_range[1]+0.5, n_samples).reshape(-1, 1).to(device)
+
+   # 1. Calculate using the optimized path (return_deriv=True)
+   with torch.no_grad():
+      start_time_opt = time.time()
+      val_both, deriv_both = model(input_test, return_deriv=True)
+      time_opt = time.time() - start_time_opt
+
+   # 2. Calculate separately using standard paths
+   with torch.no_grad():
+      start_time_sep = time.time()
+      val_separate, deriv_empty = model(input_test, return_deriv=False)
+      deriv_separate = model.Deriv(input_test)
+      time_sep = time.time() - start_time_sep
+
+   # Verify that the derivative is empty when not requested
+   assert deriv_empty.numel() == 0, "Derivative should be empty when return_deriv=False"
+
+   # 3. Compare results
+   match_val = torch.allclose(val_both, val_separate, atol=1e-6)
+   max_diff_val = torch.max(torch.abs(val_both - val_separate)).item()
+   print(f"Value match (Both vs Separate): {match_val}. Max diff: {max_diff_val:.6f}")
+   assert match_val, "Value mismatch in optimized path"
+
+   match_deriv = torch.allclose(deriv_both, deriv_separate, atol=1e-6)
+   max_diff_deriv = torch.max(torch.abs(deriv_both - deriv_separate)).item()
+   print(f"Derivative match (Both vs Separate): {match_deriv}. Max diff: {max_diff_deriv:.6f}")
+   assert match_deriv, "Derivative mismatch in optimized path"
+   
+   print(f"Timing (Optimized vs Separate): {time_opt*1000:.4f}ms vs {time_sep*1000:.4f}ms")
+
+   # 4. Test Mode 2 (External Weights)
+   print("Testing Mode 2 forward(return_deriv=True).")
+   config = {'n_of_nodes': None, 'direction': model.direction_multiplier, 'centered': model.centered}
+   spline_mode2 = UnifiedMonotonicSpline(**config, inverse=model.inverse).to(device)
+   params = ExtractParamsForExternal(model)
+   params_batch = params.repeat(n_samples, 1)
+
+   spline_mode2.eval()
+   with torch.no_grad():
+      val_mode2, deriv_mode2 = spline_mode2(input_test, params_batch, return_deriv=True)
+
+   match_val_m2 = torch.allclose(val_mode2, val_both, atol=1e-6)
+   match_deriv_m2 = torch.allclose(deriv_mode2, deriv_both, atol=1e-6)
+
+   print(f"Mode 2 Value match: {match_val_m2}")
+   print(f"Mode 2 Derivative match: {match_deriv_m2}")
+
+   assert match_val_m2, "Mode 2 Value mismatch."
+   assert match_deriv_m2, "Mode 2 Derivative mismatch."
+
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+# Test Function for TorchScript Compatibility
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+def TestScriptability(model, device):
+   """Test if the model can be compiled with TorchScript."""
+   
+   if not model.use_internal_params:
+      return
+
+   direction_str = 'Increasing' if model.direction_multiplier > 0 else 'Decreasing'
+   print(f"\nTesting TorchScript compatibility: Dir={direction_str}, Centered={model.centered}, Inverse={model.inverse}")
+   
+   sample_input = torch.randn(2, 1).to(device)
+   model.eval()
+
+   # 1. Test scripting the module itself (Mode 1)
+   try:
+      scripted_model = torch.jit.script(model)
+      print("Mode 1 scripting: Success.")
+      
+      # Verify execution (Eager vs Scripted)
+      with torch.no_grad():
+         # Test standard forward (return_deriv=False)
+         out_eager_std, deriv_eager_empty = model(sample_input, return_deriv=False)
+         out_script_std, deriv_script_empty = scripted_model(sample_input, None, False)
+         
+         # Test forward with derivative (return_deriv=True)
+         out_eager_both, deriv_eager_both = model(sample_input, return_deriv=True)
+         out_script_both, deriv_script_both = scripted_model(sample_input, None, True)
+      
+      match_std = torch.allclose(out_eager_std, out_script_std)
+      match_empty = (deriv_eager_empty.numel() == 0) and (deriv_script_empty.numel() == 0)
+      match_val = torch.allclose(out_eager_both, out_script_both)
+      match_deriv = torch.allclose(deriv_eager_both, deriv_script_both)
+      
+      print(f"Mode 1 execution match (Std/EmptyDeriv/Val/Deriv): {match_std} / {match_empty} / {match_val} / {match_deriv}")
+      assert match_std and match_empty and match_val and match_deriv, "Mode 1 scripted execution mismatch."
+
+   except Exception as e:
+      print(f"Mode 1 scripting: Failed.")
+      print(e)
+      assert False, "Mode 1 scripting failed."
+
+   # 2. Test scripting Mode 2 (External weights)
+   config = {'n_of_nodes': None, 'direction': model.direction_multiplier, 'centered': model.centered}
+   spline_mode2 = UnifiedMonotonicSpline(**config, inverse=model.inverse).to(device)
+   spline_mode2.eval()
+
+   params = ExtractParamsForExternal(model)
+   sample_weights = params.repeat(2, 1)
+
+   try:
+      scripted_mode2 = torch.jit.script(spline_mode2)
+      print("Mode 2 scripting: Success.")
+
+      with torch.no_grad():
+         out_eager, deriv_eager = spline_mode2(sample_input, sample_weights, return_deriv=True)
+         out_script, deriv_script = scripted_mode2(sample_input, sample_weights, True)
+         
+      match_val = torch.allclose(out_eager, out_script)
+      match_deriv = torch.allclose(deriv_eager, deriv_script)
+      print(f"Mode 2 execution match (Val/Deriv): {match_val} / {match_deriv}")
+      assert match_val and match_deriv, "Mode 2 scripted execution mismatch."
+
+   except Exception as e:
+      print(f"Mode 2 scripting: Failed.")
+      print(e)
+      assert False, "Mode 2 scripting failed."
 
 #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -263,9 +422,10 @@ def TestTrainingGradients(device, n_nodes=5, centered=True, direction=1):
    # Training step
    optimizer = torch.optim.Adam([input_params, weight_params], lr=0.01)
    model.train()
-   optimizer.zero_grad()
    
-   y_pred = model(input_params, weight_params)
+   # Test standard forward gradient flow
+   optimizer.zero_grad()
+   y_pred, _ = model(input_params, weight_params)
    loss = criterion(y_pred, target_y)
    loss.backward()
    
@@ -273,11 +433,26 @@ def TestTrainingGradients(device, n_nodes=5, centered=True, direction=1):
    has_input_grad = input_params.grad is not None and torch.norm(input_params.grad) > 1e-9
    has_weight_grad = weight_params.grad is not None and torch.norm(weight_params.grad) > 1e-9
    
-   print(f"Gradient flow to Input Data: {has_input_grad}")
-   print(f"Gradient flow to External Weights: {has_weight_grad}")
+   print(f"Gradient flow (Standard) to Input Data: {has_input_grad}")
+   print(f"Gradient flow (Standard) to External Weights: {has_weight_grad}")
    
-   assert has_input_grad, "No gradient for Input Data"
-   assert has_weight_grad, "No gradient for External Weights"
+   assert has_input_grad, "No gradient for Input Data (Standard)"
+   assert has_weight_grad, "No gradient for External Weights (Standard)"
+   
+   # Test gradient flow when using return_deriv=True (gradients must flow through the value)
+   optimizer.zero_grad()
+   y_pred_both, deriv_pred = model(input_params, weight_params, return_deriv=True)
+   loss_both = criterion(y_pred_both, target_y)
+   loss_both.backward()
+
+   has_input_grad_both = input_params.grad is not None and torch.norm(input_params.grad) > 1e-9
+   has_weight_grad_both = weight_params.grad is not None and torch.norm(weight_params.grad) > 1e-9
+
+   print(f"Gradient flow (return_deriv=True) to Input Data: {has_input_grad_both}")
+   print(f"Gradient flow (return_deriv=True) to External Weights: {has_weight_grad_both}")
+
+   assert has_input_grad_both, "No gradient for Input Data (return_deriv=True)"
+   assert has_weight_grad_both, "No gradient for External Weights (return_deriv=True)"
    
    if not centered:
       grad_x0 = weight_params.grad[..., -2]
@@ -324,7 +499,6 @@ if __name__ == '__main__':
    for model in models:
       if model: TestMode2Roundtrip(model, device)
    
-   # New Test Group for Derivatives
    print("\n" + "="*60)
    print("Test Group 2: Derivatives (Analytical vs Autograd and F' * H' = 1)")
    print("="*60)
@@ -332,7 +506,20 @@ if __name__ == '__main__':
       if model: TestDerivatives(model, device, x_range)
 
    print("\n" + "="*60)
-   print("Test Group 3: Gradient Flow (Mode 2 Training)")
+   print("Test Group 3: Optimized Forward (Value + Derivative)")
+   print("="*60)
+   for model, x_range in zip(models, ranges):
+      if model: TestForwardWithDeriv(model, device, x_range)
+
+   # Test Group for Scriptability
+   print("\n" + "="*60)
+   print("Test Group 4: TorchScript Compatibility")
+   print("="*60)
+   for model in models:
+      if model: TestScriptability(model, device)
+
+   print("\n" + "="*60)
+   print("Test Group 5: Gradient Flow (Mode 2 Training)")
    print("="*60)
    TestTrainingGradients(device, n_nodes=5, centered=True, direction=1)
    TestTrainingGradients(device, n_nodes=5, centered=False, direction=1)
@@ -349,7 +536,7 @@ if __name__ == '__main__':
       EvaluateAndPlot(ax2, model_decreasing, DecreasingTarget, 'Mode 1: Decreasing, Centered', (-3, 3), device)
    if model_non_centered:
       EvaluateAndPlot(ax3, model_non_centered, NonCenteredTarget, 'Mode 1: Increasing, Non-Centered', (-5, 8), device)
-      if not model_non_centered.centered:
+      if not model_non_centered.centered and model_non_centered.x_0 is not None and model_non_centered.y_0 is not None:
          with torch.no_grad():
             x0 = model_non_centered.x_0.item()
             y0 = model_non_centered.y_0.item()

@@ -153,7 +153,7 @@ namespace ns_base {
          return *this;
       }
 
-      void Init(size_t n, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) {
+      void Init(size_t n, t_val x_step = t_val(1.), t_val y_step = t_val(1.), t_val x0 = t_val(0), t_val y0 = t_val(0)) {
          m_n = n;
          m_data.resize(CalculateTotalSize(n));
          std::fill(m_data.begin(), m_data.end(), t_val(0.));
@@ -162,6 +162,8 @@ namespace ns_base {
             std::fill(x_pos, y_pos, log(x_step)); // y_pos is after both x_pos and x_neg
          if (y_step != t_val(1.))
             std::fill(y_pos, ln_d, log(y_step)); // ln_d is after y_pos and y_neg
+         *p_x_0 = x0;
+         *p_y_0 = y0;
       }
 
       size_t N() const noexcept { return m_n; }
@@ -399,7 +401,7 @@ namespace ns_base {
       }
 
    public:
-      const auto& Container() const noexcept { return *(t_base*)(this); }
+      const auto& Container() const noexcept { return *static_cast<const t_base*>(this); }
 
       template <ns_base::N_SplineMode I = P_Mode>
       std::enable_if_t<I == ns_base::smInternal, const t_params&> ParamContainer() const noexcept { return *static_cast<const t_params*>(this); }
@@ -429,7 +431,10 @@ namespace ns_base {
       std::enable_if_t<Mode == smExternal, void> Init(bool centered = true, int direction = 1) { InitImpl(centered, direction); }
 
       template<N_SplineMode Mode = P_Mode>
-      std::enable_if_t<Mode == smInternal, void> Init(size_t n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) { this->t_base2::Init(n, x_step, y_step); InitImpl(centered, direction); }
+      std::enable_if_t<Mode == smInternal, void> Init(size_t n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.), t_val x0 = t_val(0), t_val y0 = t_val(0)) {
+         this->t_base2::Init(n, x_step, y_step, x0, y0);
+         InitImpl(centered, direction);
+      }
 
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       // Mode 1: Loading from file (unified function)
@@ -712,7 +717,7 @@ namespace ns_base {
       }
       
    private:
-      auto& Container() noexcept { return *(t_base*)(this); }
+      auto& Container() noexcept { return *static_cast<t_base*>(this); }
       template <ns_base::N_SplineMode I = P_Mode>
       std::enable_if_t<I == ns_base::smInternal, t_params&> ParamContainer() noexcept { return *static_cast<t_params*>(this); }
       
@@ -860,7 +865,7 @@ namespace ns_base {
                   // EVEN NODE (Knot)
                   size_t t = s / 2;
                   // W-grid (T_W,even)
-                  grads.ln_d[t] += adj_w_s * (t_val(-0.5) * w[s]);
+                  grads.ln_d[t] -= adj_w_s * t_val(0.5) * w[s];
 
                   // Y-grid (T_Y, even) - Prefix sums
                   for (size_t q = 0; q < n; ++q) {
@@ -904,7 +909,7 @@ namespace ns_base {
 
                   // --- Contribution via W_s (T_W and T_Mid via W) ---
                   // W_s w.r.t. m
-                  p_grad_y[i] += adj_w_s * (-w[s]);
+                  p_grad_y[i] -= adj_w_s * w[s];
                   // W_s w.r.t. l (Simplified form)
                   p_grad_x[2*i] += adj_w_s * (alpha * p0 / delta_y);
                   p_grad_x[2*i+1] += adj_w_s * (beta * p1 / delta_y);
@@ -919,8 +924,8 @@ namespace ns_base {
                   p_grad_x[2*i+1] -= adj_y_s * dlam;
 
                   // Y_s w.r.t. r
-                  grads.ln_d[t] += adj_y_s * (-t_val(0.5) * a_w * (t_val(1.)-lambda) * (y[s-1] - y[s]) * inv_a);
-                  grads.ln_d[t+1] += adj_y_s * (-t_val(0.5) * b_w * lambda * (y[s+1] - y[s]) * inv_a);
+                  grads.ln_d[t] -= adj_y_s * t_val(0.5) * a_w * (t_val(1.)-lambda) * (y[s-1] - y[s]) * inv_a;
+                  grads.ln_d[t+1] -= adj_y_s * t_val(0.5) * b_w * lambda * (y[s+1] - y[s]) * inv_a;
 
                   // --- Contribution via Y-grid (T_Y, odd) - Prefix sums using interpolation weights
                   for (size_t q = 0; q < n; ++q) {
