@@ -1,11 +1,11 @@
 # Monotonic Linear Rational Splines (MLRS)
 
-*A lightweight Python + C++ library for fast, invertible, monotone **linear rational splines** with closed‑form inverse, linear tails, centered or non‑centered parameterizations, and full analytical derivatives.*
+*A lightweight Python + C++ library for fast, invertible, monotone **linear rational splines** with closed-form inverse, linear tails, centered or non-centered parameterizations, and full analytical derivatives.*
 
 > **Credits.** This work is informed by the linear rational spline (LRS) flow introduced by **Dolatabadi, Erfani, and Leckie (AISTATS 2020)**. If you use this library, please cite: *Invertible Generative Modeling using Linear Rational Splines* (PMLR v108).
 > The construction of monotone LRS interpolants with an interior point per bin follows classic ideas from **Fuhr & Kallay (1992)**.
 
-> **Math typesetting note (GitHub).** This document uses a KaTeX‑friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto‑sizing delimiters. Multi‑case formulas use `cases` and never include row‑end punctuation. Keep a blank line **before and after** each `$$` block.
+> **Math typesetting note (GitHub).** This document uses a KaTeX-friendly subset of LaTeX: no `\tag`, no `\dfrac`, and no auto-sizing delimiters. Multi-case formulas use `cases` and never include row-end punctuation. Keep a blank line **before and after** each `$$` block.
 
 ---
 
@@ -27,10 +27,10 @@
    * [6.2 Node Jacobians](#62-node-jacobians)
    * [6.3 Assembled derivatives (interior)](#63-assembled-derivatives-interior)
    * [6.4 Assembled derivatives (tails)](#64-assembled-derivatives-tails)
-   * [6.5 Inverse‑mode parameter derivatives](#65-inversemode-parameter-derivatives)
+   * [6.5 Inverse-mode parameter derivatives](#65-inversemode-parameter-derivatives)
 7. [Python API](#python-api)
 8. [C++ API](#c-api)
-9. [File format & cross‑language interoperability](#file-format--crosslanguage-interoperability)
+9. [File format & cross-language interoperability](#file-format--crosslanguage-interoperability)
 10. [Numerical stability & notes](#numerical-stability--notes)
 11. [Examples & tests](#examples--tests)
 12. [FAQ](#faq)
@@ -41,19 +41,20 @@
 ## What is in the box
 
 * **Elementwise monotone transforms** on \$\mathbb{R}\$ using *linear rational splines* (homographic segments) with a **single interior point per bin**.
-* **Closed‑form inverse** with the same homographic form: forward and inverse cost are symmetric.
+* **Closed-form inverse** with the same homographic form: forward and inverse cost are symmetric.
 * **Two operation modes**
 
   * **Mode 1 (internal parameters):** one spline object with trainable parameters.
   * **Mode 2 (external weights):** pass a different parameter vector per sample (batched).
-* **Centered vs non‑centered:** either force the spline to pass through \$(0,0)\$ or learn \$(x\_0,y\_0)\$.
-* **Increasing / decreasing** directions with a single flag (decreasing is an odd‑reflection wrapper).
-* **Linear tails** outside the interior, set by the end‑knot derivatives.
-* **Full analytical derivatives** of the forward mapping w\.r.t. unconstrained parameters (C++), plus **inverse‑mode** gradients via the implicit function theorem.
+* **Centered vs non-centered:** either force the spline to pass through \$(0,0)\$ or learn \$(x\_0,y\_0)\$.
+* **Increasing / decreasing** directions with a single flag (decreasing is an odd-reflection wrapper).
+* **Linear tails** outside the interior, set by the end-knot derivatives.
+* **Full analytical derivatives** of the forward mapping w\.r.t. unconstrained parameters (C++), plus **inverse-mode** gradients via the implicit function theorem.
+* **TorchScript compatible** — the Python module is designed for `torch.jit.script` with fully typed signatures and scriptable control flow.
 * **Reference implementations**
 
   * `python/mlrsplines/LRSplines.py` — PyTorch module (`UnifiedMonotonicSpline`)
-  * `cpp/mlrsplines/LRSplines.h` — single‑header C++ (header‑only)
+  * `cpp/mlrsplines/LRSplines.h` — single-header C++ (header-only)
 * **Test suites** for Python and C++ that check value/derivative consistency and inverse identities.
 
 ---
@@ -112,10 +113,13 @@ y = torch.tanh(2*x)
 opt = torch.optim.Adam(spline.parameters(), lr=1e-2)
 for _ in range(1000):
     opt.zero_grad()
-    pred = spline(x)
+    pred, _ = spline(x)            # forward returns (value, derivative)
     loss = torch.nn.functional.mse_loss(pred, y)
     loss.backward()
     opt.step()
+
+# Optionally get value and derivative in a single call
+pred, dpred = spline(x, return_deriv=True)
 
 # Save parameters (Mode 1 format)
 spline.SaveSplineWeights("spline_tanh.txt")
@@ -125,7 +129,7 @@ weights = ExtractParamsForExternal(spline)          # 8N+1 (centered) or 8N+3 (n
 x_batch = torch.linspace(-2, 2, 10).unsqueeze(-1)
 spline2 = UnifiedMonotonicSpline(n_of_nodes=None, inverse=False,
                                  direction=1, centered=True)
-y2 = spline2(x_batch, weights.expand(x_batch.shape[0], -1))
+y2, _ = spline2(x_batch, weights.expand(x_batch.shape[0], -1))
 ```
 
 ---
@@ -145,6 +149,11 @@ double y  = s.Calc(0.5);
 double dy = s.CalcDeriv(0.5);
 double x  = s.CalcInv(y);
 
+// Mode 1: initialize with custom spacing and center offset
+t_spline s2;
+s2.Init(/*n=*/4, /*centered=*/false, /*direction=*/1,
+        /*x_step=*/1.0, /*y_step=*/1.0, /*x0=*/0.5, /*y0=*/-0.3);
+
 // Mode 2: evaluate from a raw parameter buffer (8N+1 or 8N+3)
 std::vector<double> params = /* ... load ... */;
 t_input fly(true, +1);
@@ -162,12 +171,12 @@ We construct a symmetric spline around a center (by default the origin) using **
 
 * **Unconstrained parameters per side**
 
-  * \$2n\$ *x‑spacings*: \$\boldsymbol{\ell}^{\pm}\in\mathbb{R}^{2n}\$
+  * \$2n\$ *x-spacings*: \$\boldsymbol{\ell}^{\pm}\in\mathbb{R}^{2n}\$
     (two positive spacings per bin; exponentiated to guarantee positivity).
-  * \$n\$ *y‑heights*: \$\mathbf{m}^{\pm}\in\mathbb{R}^{n}\$
+  * \$n\$ *y-heights*: \$\mathbf{m}^{\pm}\in\mathbb{R}^{n}\$
     (one positive increment per bin; exponentiated).
 * **Derivatives at base knots**: \$\mathbf{r}\in\mathbb{R}^{2n+1}\$ with \$D\_t=\exp(r\_t)>0\$.
-* **Optional center offsets** (non‑centered only): \$(x\_0,y\_0)\in\mathbb{R}^2\$.
+* **Optional center offsets** (non-centered only): \$(x\_0,y\_0)\in\mathbb{R}^2\$.
 
 We define
 
@@ -178,7 +187,7 @@ D_t=\exp(r_t),\qquad
 W_{2t}=\frac{1}{\sqrt{D_t}}.
 $$
 
-> **Why \$-\log 2\$?** It aligns Python Mode‑1 and Mode‑2 parameter initializations so that “internal” and “external” paths produce identical knots and numerics (see §9). It also gives a natural scale when inputs are near zero.
+> **Why \$-\log 2\$?** It aligns Python Mode-1 and Mode-2 parameter initializations so that "internal" and "external" paths produce identical knots and numerics (see §9). It also gives a natural scale when inputs are near zero.
 
 ### 5.2 Knots and midpoints
 
@@ -187,7 +196,7 @@ There are **\$2n+1\$ base knots** (even indices \$s=0,2,\dots,4n\$), plus **one 
 * **X grid.** Cumulative sums of \$p\_k^\pm\$ produce strictly increasing \$X\_s\$.
   Negative side grows to the left, positive to the right; the center is \$s=2n\$.
 * **Y grid.** Cumulative sums of \$h\_i^\pm\$ create monotone \$Y\_s\$ with \$Y\_{2n}=0\$.
-* **Midpoints.** Each bin’s midpoint uses a location \$\lambda\in(0,1)\$ derived from that bin’s two x‑spacings: \$\lambda=\frac{p\_0}{p\_0+p\_1}\$.
+* **Midpoints.** Each bin's midpoint uses a location \$\lambda\in(0,1)\$ derived from that bin's two x-spacings: \$\lambda=\frac{p\_0}{p\_0+p\_1}\$.
 * **Midpoint weights** \$W\_s\$ enforce \$C^1\$ matching of the homographic pieces.
 
 Schematic (even = base, odd = midpoint):
@@ -203,6 +212,14 @@ $$
 \;-\; \cdots \;-\;
 \underbrace{Y_{4n}}_{\text{right end}}.
 $$
+
+**Midpoint weight computation.** The midpoint weight uses the identity \$W\_{2t} \cdot D\_t = 1/W\_{2t}\$, so the numerator in the midpoint weight formula can be written as
+
+$$
+\lambda / W_{2t} + (1-\lambda) / W_{2(t+1)},
+$$
+
+which avoids an explicit multiply by \$D\_t\$ and is algebraically equivalent to \$\lambda W\_{2t} D\_t + (1-\lambda) W\_{2(t+1)} D\_{t+1}\$.
 
 ### 5.3 Forward / inverse evaluation
 
@@ -220,7 +237,15 @@ $$
 
 <div align="right"><em>(Eq. F)</em></div>
 
-This is the **two‑weight** form used in LRS flows and ensures a **closed‑form inverse** by swapping the roles of \$(X,W)\$ and \$(Y,W)\$ (see inverse formulas in §6).
+This is the **two-weight** form used in LRS flows and ensures a **closed-form inverse** by swapping the roles of \$(X,W)\$ and \$(Y,W)\$ (see inverse formulas in §6).
+
+**FMA evaluation form.** The implementation uses an equivalent formulation that improves numerical precision via fused multiply-add (FMA) structure. Define \$\beta = b/S\$; then
+
+$$
+g(v) = Y_{j-1} + \beta\,(Y_j - Y_{j-1}),
+$$
+
+and analogously for the inverse: \$g^{-1}(y) = X\_{j-1} + \beta\,(X\_j - X\_{j-1})\$.
 
 ### 5.4 Linear tails
 
@@ -232,7 +257,7 @@ Outside $\[X\_0,X\_{4n}]\$ we attach linear tails with slopes \$D\_0\$ and \$D\_
 
 This section reproduces the complete, verified analytical derivatives of the **forward** map \$g(v)\$ with respect to all unconstrained parameters, matching `cpp/mlrsplines/LRSplines.h`.
 
-We first restate the **two‑piece form** within a bin with an interior point (following Fuhr & Kallay; see also Dolatabadi et al.). Let \$\phi=\frac{v-X^{(k)}}{X^{(k+1)}-X^{(k)}}\in\[0,1]\$, mid‑location \$\lambda\in(0,1)\$, and positive weights \$w^{(k)},w^{(m)},w^{(k+1)}\$:
+We first restate the **two-piece form** within a bin with an interior point (following Fuhr & Kallay; see also Dolatabadi et al.). Let \$\phi=\frac{v-X^{(k)}}{X^{(k+1)}-X^{(k)}}\in\[0,1]\$, mid-location \$\lambda\in(0,1)\$, and positive weights \$w^{(k)},w^{(m)},w^{(k+1)}\$:
 
 $$
 g(\phi)=
@@ -286,7 +311,7 @@ $$
 
 <div align="right"><em>(Eq. 4)</em></div>
 
-The library implements these ideas with a **symmetric grid** around the center and \$\lambda\$ **derived** from two x‑spacings per bin:
+The library implements these ideas with a **symmetric grid** around the center and \$\lambda\$ **derived** from two x-spacings per bin:
 
 $$
 \lambda=\frac{p_0}{p_0+p_1},\qquad p_0=\exp(\ell_{2i}^\sigma-\log 2),\quad p_1=\exp(\ell_{2i+1}^\sigma-\log 2).
@@ -332,7 +357,7 @@ $$
 a=W_{2t},\quad b=W_{2t+2},\quad \alpha=\sqrt{D_t},\quad \beta=\sqrt{D_{t+1}},\quad A=(1-\lambda)a+\lambda b.
 $$
 
-**Shifts (non‑centered only).** For all nodes \$s\$:
+**Shifts (non-centered only).** For all nodes \$s\$:
 
 $$
 \frac{\partial X_s}{\partial x_0}=1,\qquad \frac{\partial Y_s}{\partial y_0}=1.
@@ -364,6 +389,8 @@ W_s = \big(\lambda W_{2t}D_t + (1-\lambda) W_{2t+2}D_{t+1}\big)\frac{\Delta x}{\
 $$
 
 <div align="right"><em>(Eq. 10)</em></div>
+
+Using the identity \$W\_{2t} D\_t = 1/W\_{2t}\$, this is equivalently computed as \$(\lambda/W\_{2t} + (1-\lambda)/W\_{2(t+1)}) \cdot \Delta x / \Delta y\$.
 
 Hence,
 
@@ -409,7 +436,7 @@ $$
 
 <div align="right"><em>(Eq. 15)</em></div>
 
-**Y grid (even vs. odd \$s\$).** Prefix‑sum contributions:
+**Y grid (even vs. odd \$s\$).** Prefix-sum contributions:
 
 $$
 \frac{\partial Y_s}{\partial m_i^+} = h_i^+ \times
@@ -444,7 +471,7 @@ $$
 
 <div align="right"><em>(Eq. 17)</em></div>
 
-**X‑spacings \$\ell\_k^\sigma\$.** Two contributions:
+**X-spacings \$\ell\_k^\sigma\$.** Two contributions:
 
 $$
 \frac{\partial g}{\partial \ell_k^\sigma} = T_X + T_{\mathrm{Mid}}.
@@ -466,7 +493,7 @@ $$
 
 with \$\partial W\_s/\partial \ell\$ and \$\partial Y\_s/\partial \ell\$ from (Eq. 11) and (Eq. 14).
 
-**Y‑heights \$m\_i^\sigma\$.**
+**Y-heights \$m\_i^\sigma\$.**
 
 $$
 \frac{\partial g}{\partial m_i^\sigma}= T_Y + T_W.
@@ -484,7 +511,7 @@ $$
 
 with \$\partial Y/\partial m\$ from (Eq. 16a,b).
 
-**Log‑derivatives \$r\_t\$.**
+**Log-derivatives \$r\_t\$.**
 
 $$
 \frac{\partial g}{\partial r_t}= T_{W,\mathrm{even}} + T_{\mathrm{Mid}}.
@@ -531,7 +558,7 @@ $$
 
 all other partials are zero.
 
-### 6.5 Inverse‑mode parameter derivatives
+### 6.5 Inverse-mode parameter derivatives
 
 For the **inverse map** \$x=g^{-1}(y)\$, use the **Implicit Function Theorem**. Let \$y=g(x;\Theta)\$, with \$x=g^{-1}(y;\Theta)\$. Then
 
@@ -543,7 +570,7 @@ $$
 
 <div align="right"><em>(Eq. 21)</em></div>
 
-In code, we compute forward‑mode parameter derivatives \$\partial g/\partial\Theta\$ at the recovered \$x\$, divide by the forward derivative \$\partial g/\partial x\$, and apply a robust \$\varepsilon\$ clamp. In *saturation* regions where \$\partial g/\partial x \approx 0\$, we zero the inverse gradients for numerical stability.
+In code, we compute forward-mode parameter derivatives \$\partial g/\partial\Theta\$ at the recovered \$x\$, divide by the forward derivative \$\partial g/\partial x\$, and apply a robust \$\varepsilon\$ clamp. In *saturation* regions where \$\partial g/\partial x \approx 0\$, the library zeros inverse gradients for numerical stability.
 
 ---
 
@@ -564,19 +591,26 @@ UnifiedMonotonicSpline(
 
   * **Mode 1 (internal params):** `n_of_nodes` is an `int`. The layer holds trainable parameters.
   * **Mode 2 (external params):** `n_of_nodes=None`. You must pass `spline_weights` to `forward`.
+* **TorchScript compatibility.** The module is designed for `torch.jit.script`: all public methods have fully typed signatures and all control flow is scriptable. Optional parameters are annotated as `Optional[torch.Tensor]` with explicit unwrapping where needed.
 
-#### `forward(input_data, spline_weights=None)`
+#### `forward(input_data, spline_weights=None, return_deriv=False) -> Tuple[Tensor, Tensor]`
 
-* **Mode 1:** `spline_weights` must be `None`. A **single** spline is applied elementwise to **all** values in `input_data`.
-* **Mode 2:** `spline_weights` is required.
+Returns a **tuple** `(value, derivative)`.
 
-  Shape rules:
+* When `return_deriv=False` (default), the second element is an **empty tensor** (`torch.zeros(0)`). This avoids unnecessary computation while keeping the return type consistent for TorchScript.
+* When `return_deriv=True`, both the spline value and its derivative with respect to the input are computed in a single pass (sharing knot calculation and bin lookup), which is more efficient than calling `forward` and `Deriv` separately.
+* If `input_data` has zero elements, returns `(input_data, torch.empty_like(input_data))`.
 
-  * Let `input_data.shape = (*B, L)`. We flatten leading dims: `B_flat = prod(*B)`.
-  * `spline_weights.shape` must be either `(*B, W)` or `(B_flat, W)`.
-  * `W` must be `8N+1` (centered) or `8N+3` (non‑centered), \$N\ge 1\$.
+**Mode 1:** `spline_weights` must be `None`. A **single** spline is applied elementwise to **all** values in `input_data`.
+**Mode 2:** `spline_weights` is required.
 
-**Return:** same shape as `input_data`.
+Shape rules:
+
+* Let `input_data.shape = (*B, L)`. We flatten leading dims: `B_flat = prod(*B)`.
+* `spline_weights.shape` must be either `(*B, W)` or `(B_flat, W)`.
+* `W` must be `8N+1` (centered) or `8N+3` (non-centered), \$N\ge 1\$.
+
+**Return shapes:** both elements of the tuple have the same shape as `input_data` when their respective computation is requested; otherwise the unused element is a zero-dimensional tensor.
 
 **Parameter layout (Mode 2)** for a single vector of length `W`:
 
@@ -586,13 +620,26 @@ UnifiedMonotonicSpline(
 
 Blocks contain unconstrained entries (internally exponentiated); `x_0,y_0` appear iff `centered=False`.
 
+#### `Deriv(input_data, spline_weights=None) -> Tensor`
+
+Computes only the derivative of the spline (or inverse spline) with respect to the input. Returns a single tensor with the same shape as `input_data`.
+
+This is a convenience method equivalent to:
+```python
+_, deriv = spline.forward(input_data, spline_weights, return_deriv=True)
+```
+
+For use cases needing both value and derivative, prefer `forward(..., return_deriv=True)` to avoid redundant knot computation.
+
 #### `SaveSplineWeights(path, append=False)`  *(Mode 1 only)*
 
 Writes a simple text format (see §9) with a version header `#VER = 1001`.
 
 #### `ExtractParamsForExternal(model) -> torch.Tensor`
 
-Returns a Mode‑2 weight vector that reproduces the given Mode‑1 model (handles the \$\log 2\$ offset required by Mode‑2 parsing). Length is `8N+1` or `8N+3`.
+Returns a Mode-2 weight vector that reproduces the given Mode-1 model (handles the \$\log 2\$ offset required by Mode-2 parsing). Length is `8N+1` or `8N+3`.
+
+For non-centered models, scalar parameters are correctly promoted to 1D before concatenation.
 
 ---
 
@@ -614,6 +661,18 @@ Common constructor:
 T_LRSplines<double> s(centered /*bool*/, direction /*+1 or -1*/);
 ```
 
+**Mode 1 initialization**
+
+```cpp
+// Init with N bins, spacing, and optional center offset
+void Init(size_t n,
+          bool centered = true, int direction = 1,
+          T x_step = 1.0, T y_step = 1.0,
+          T x0 = 0.0, T y0 = 0.0);
+```
+
+The `x0` and `y0` parameters set the initial center offsets for non-centered splines. For centered splines these are stored but have no effect (the offset is always added to the knot grid; when zero it is a no-op).
+
 **Mode 1 methods**
 
 * `void TextLoad(const std::string& file)` — load text weights (from Python).
@@ -622,7 +681,7 @@ T_LRSplines<double> s(centered /*bool*/, direction /*+1 or -1*/);
 * `T CalcDeriv(T x) const` — forward derivative \$\partial g/\partial x\$.
 * `T CalcInvDeriv(T y) const` — inverse derivative \$\partial g^{-1}/\partial y\$.
 * `t_params CalculateGradients(T v) const` — parameter derivatives \$\partial g/\partial\Theta\$ at input \$v\$.
-* `t_params CalculateInverseGradients(T y) const` — inverse‑mode parameter derivatives using (Eq. 21).
+* `t_params CalculateInverseGradients(T y) const` — inverse-mode parameter derivatives using (Eq. 21).
 
 **Mode 2 methods**
 
@@ -638,7 +697,7 @@ T_LRSplines<double> s(centered /*bool*/, direction /*+1 or -1*/);
 
 ---
 
-## File format & cross‑language interoperability
+## File format & cross-language interoperability
 
 Python `SaveSplineWeights` (Mode 1) writes:
 
@@ -661,10 +720,13 @@ ln_d  (2N+1)
 
 ## Numerical stability & notes
 
-* Denominators are clamped by a small `eps` depending on dtype (FP16/BF16: \$10^{-4}\$, else \$10^{-6}\$).
-* The “decreasing” direction is implemented as a wrapper: forward uses \$g(-x)\$, inverse returns \$-g^{-1}(y)\$; derivatives respect the chain rule.
-* Inverse‑mode parameter gradients divide by \$\partial g/\partial x\$; when the forward slope saturates to \$\approx 0\$, the library zeros inverse gradients to avoid blow‑ups.
+* Denominators and spacing sums are clamped by `eps = 1e-6` (a fixed constant for both FP32 and FP64). This applies uniformly across both the Python and C++ implementations.
+* The **FMA evaluation form** (\$Y\_k + \beta \cdot \Delta Y\$) is preferred over the original barycentric form (\$(Y\_k a + Y\_j b)/S\$) for improved numerical precision, particularly when \$Y\_k\$ and \$Y\_j\$ are close in magnitude.
+* The midpoint weight numerator uses the algebraic identity \$W\_{2t} \cdot D\_t = 1/W\_{2t}\$ to compute \$\lambda/W\_{2t} + (1-\lambda)/W\_{2(t+1)}\$, avoiding explicit multiplication by large derivatives.
+* The "decreasing" direction is implemented as a wrapper: forward uses \$g(-x)\$, inverse returns \$-g^{-1}(y)\$; derivatives respect the chain rule.
+* Inverse-mode parameter gradients divide by \$\partial g/\partial x\$; when the forward slope saturates to \$\approx 0\$, the library zeros inverse gradients to avoid blow-ups.
 * Binary search (`std::upper_bound` / `torch.searchsorted`) finds the segment; indices are clamped to $\[1,4n]\$.
+* The Python implementation uses slice-based indexing (`x[0:1]` rather than `x[0]`) for tail boundary values to maintain consistent tensor dimensionality, ensuring correct broadcasting in both batched and unbatched paths.
 
 ---
 
@@ -675,15 +737,17 @@ ln_d  (2N+1)
 See `python/tests/TestLRSplines.py` for a complete harness that trains several configurations and plots predicted vs target curves. It also:
 
 * Exports to text and reloads in C++.
-* Shows **Mode‑2 equivalence**: the external‑weights path matches Mode 1 within \$10^{-6}\$.
-* Checks **round‑trip** \$x \mapsto y \mapsto x\$ to \$10^{-4}\$.
+* Shows **Mode-2 equivalence**: the external-weights path matches Mode 1 within \$10^{-6}\$.
+* Checks **round-trip** \$x \mapsto y \mapsto x\$ to \$10^{-4}\$.
 * Verifies **gradient flow** to both inputs and external weights in autograd.
+
+Note that `forward()` now returns a tuple; training loops should unpack as `pred, _ = spline(x)` or use `pred, deriv = spline(x, return_deriv=True)` when both are needed.
 
 ### C++ tests
 
 `cpp/tests/TestLRSplines.cpp` runs a concise battery:
 
-* Value/derivative consistency across **Internal / External (on‑the‑fly / cached / ctor)** paths.
+* Value/derivative consistency across **Internal / External (on-the-fly / cached / ctor)** paths.
 * Inverse identities \$g^{-1}(g(x))=x\$ and \$(\partial g/\partial x)(\partial g^{-1}/\partial y)\approx 1\$ away from saturation.
 * **Analytical vs. numerical** derivatives via Richardson extrapolation.
 * API behavior (uninitialized errors, move semantics).
@@ -693,7 +757,7 @@ See `python/tests/TestLRSplines.py` for a complete harness that trains several c
 ## FAQ
 
 **Why linear rational (homographic) splines?**
-They admit a **closed‑form inverse** with the **same algebraic form** as the forward, so forward and inverse costs are symmetric. In contrast, quadratic/cubic rational splines often require solving a polynomial for inversion. The default centered mode keeps \$(0,0)\$ fixed so values below/above \$0\$ remain below/above after transformation.
+They admit a **closed-form inverse** with the **same algebraic form** as the forward, so forward and inverse costs are symmetric. In contrast, quadratic/cubic rational splines often require solving a polynomial for inversion. The default centered mode keeps \$(0,0)\$ fixed so values below/above \$0\$ remain below/above after transformation.
 
 **How is monotonicity guaranteed?**
 All increments \$p^\pm, h^\pm, D\$ are exponentials of unconstrained parameters, hence positive. Midpoint weights \$W\_s\$ maintain positive slope in each piece (Fuhr–Kallay), and linear tails inherit positive slopes from \$D\_0,D\_{2n}\$.
@@ -701,8 +765,11 @@ All increments \$p^\pm, h^\pm, D\$ are exponentials of unconstrained parameters,
 **Can I condition the spline on context (flows)?**
 Yes—use **Mode 2** and predict the external weight vector from your context network, then call the layer with those weights.
 
-**What about log‑det‑Jacobian for flows?**
-The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$. In elementwise flows, `logabsdet` is the sum of \$\log|\partial g/\partial x|\$ across dimensions.
+**What about log-det-Jacobian for flows?**
+The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$. In Python, use `forward(..., return_deriv=True)` to get value and derivative in a single pass; elementwise flows compute `logabsdet` as the sum of \$\log|\partial g/\partial x|\$ across dimensions.
+
+**Is TorchScript supported?**
+Yes. The Python `UnifiedMonotonicSpline` module is designed for `torch.jit.script` compatibility. All public methods have explicit type annotations, optional parameters use `Optional[torch.Tensor]` with proper unwrapping, and all control flow avoids Python-only constructs. The `forward` method returns a fixed `Tuple[Tensor, Tensor]` signature to satisfy TorchScript's requirement for consistent return types.
 
 ---
 
@@ -719,11 +786,12 @@ The C++ API exposes \$\partial g/\partial x\$ and \$\partial g^{-1}/\partial y\$
 * **Knots & weights.** `CalculateKnots` (C++) and `_CalculateKnots` (Py) implement §5.2–§5.4:
 
   * base weights \$W\_{2t}=1/\sqrt{D\_t}\$
-  * mid‑location \$\lambda=\frac{p\_0}{p\_0+p\_1}\$
-  * midpoint weight \$W\_s\$ from (Eq. 10)
+  * mid-location \$\lambda=\frac{p\_0}{p\_0+p\_1}\$
+  * midpoint weight \$W\_s\$ from (Eq. 10), computed using the \$1/W\$ identity
   * midpoint value \$Y\_s\$ from (Eq. 13)
   * cumulative \$X,Y\$ with optional center offsets \$x\_0,y\_0\$
   * linear tails with slopes \$D\_0,D\_{2n}\$
-* **Forward evaluation.** `ApplySplineUnified` (C++) / `_ApplySpline` (Py) implement the barycentric form (Eq. F) with interval search and tails.
+  * Y-grid assembly uses direct indexed assignment for efficiency (Python)
+* **Forward evaluation.** `ApplySpline` (C++) / `_ApplySpline` (Py) implement the FMA form of the barycentric interpolation (Eq. F) with interval search and tails. The Python version computes value and derivative conditionally via `calc_value` / `calc_deriv` flags, returning a fixed-shape tuple for scriptability.
 * **Gradients.** `CalculateGradientsUnified` (C++) implements (Eq. 5)–(Eq. 20).
   `CalculateInverseGradients` applies (Eq. 21).
