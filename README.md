@@ -10,24 +10,30 @@ C++ components are all tested on Windows and Mac, gcc, clang and Visual Studio 2
 
 | File | What it provides |
 |---|---|
-| `LRSplines.py` | `UnifiedMonotonicSpline` &mdash; invertible monotone rational linear spline layer |
-| `EmbedModels.py` | Learnable Euclidean attention, auto-compressing networks, invertible flows, and the **Wristband Gaussian Loss** for deterministic Gaussian autoencoders |
-| `TestLRSplines.py` | Tests and training examples for `LRSplines.py` |
-| `DeterministicGAE.py` | End-to-end example: **Deterministic Gaussian Autoencoder** built from the modules in `EmbedModels.py` |
+| `LRSplines.py` | `UnifiedMonotonicSpline` — invertible monotone rational linear spline layer · [docs](docs/mlrsplines.md) |
+| `EmbedModels.py` | Learnable Euclidean attention, auto-compressing networks, invertible flows, and the **Wristband Gaussian Loss** for deterministic Gaussian autoencoders · [docs](docs/wristband.md) |
+| `TestLRSplines.py` | Tests and training examples for `LRSplines.py` · [source](python/tests/TestLRSplines.py) |
+| `DeterministicGAE.py` | End-to-end example: **Deterministic Gaussian Autoencoder** built from the modules in `EmbedModels.py` · [source](python/tests/DeterministicGAE.py) |
+| `GAECondSample.py` | **Deterministic Conditional Sampling** on MNIST: trains a split-encoder GAE to inpaint missing image halves, demonstrating conditional generation by sampling from the learned Gaussian latent space · [docs](docs/gae_conditional_sampling.md) · [source](python/tests/GAECondSample.py) |
+| `CosineAnnealingWarmRestartsDecay.py` | `C_CosineAnnealingWarmRestartsDecay` — cosine annealing with warm restarts, fractional cycle growth, exponential peak decay, and linear warmup |
 
 ---
 
 ## UnifiedMonotonicSpline (`LRSplines.py`)
 
 > A unified, batched, **TorchScript-compatible monotone rational linear spline** layer with forward/inverse modes and increasing/decreasing directions.
+>
+> 📖 [Full documentation](docs/mlrsplines.md) · 🧪 [Tests & examples](python/tests/TestLRSplines.py)
 
-**Why it's cool:** `UnifiedMonotonicSpline` is an **invertible, batched monotonic rational linear spline** module available in both **PyTorch** and **modern C++**, using one **unconstrained parameterization** (`8N+1` or `8N+3` if uncentered) shared across languages. It guarantees monotonicity by construction (exponential spacing/derivative params), provides stable **forward and inverse** transforms with linear tails, and exposes **analytic derivatives** (and inverse-gradients via the implicit function theorem) for seamless training &mdash; including an optimized `forward(return_deriv=True)` path that computes both value and derivative in a single pass sharing knot calculation and bin search. The PyTorch module is fully **TorchScript-compatible** (`torch.jit.script`) for deployment without Python overhead. You can run it with **internal weights** (single spline applied to many values) or **external weights** (per-example splines in a batch), making it ideal for **normalizing flows**, **calibration layers**, **monotone neural networks**, tabular feature transforms, and differentiable bijective scalers. The C++17 implementation mirrors the PyTorch API, is tested on Windows/macOS with MSVC/Clang/GCC, and the on-the-fly knot computation uses vectorized barycentric rational interpolation with binary search over the `4N+1` knots for fast, low-latency inference.
+**Why it's cool:** `UnifiedMonotonicSpline` is an **invertible, batched monotonic rational linear spline** module available in both **PyTorch** and **modern C++**, using one **unconstrained parameterization** (`8N+1` or `8N+3` if uncentered) shared across languages. It guarantees monotonicity by construction (exponential spacing/derivative params), provides stable **forward and inverse** transforms with linear tails, and exposes **analytic derivatives** (and inverse-gradients via the implicit function theorem) for seamless training — including an optimized `forward(return_deriv=True)` path that computes both value and derivative in a single pass sharing knot calculation and bin search. The PyTorch module is fully **TorchScript-compatible** (`torch.jit.script`) for deployment without Python overhead. You can run it with **internal weights** (single spline applied to many values) or **external weights** (per-example splines in a batch), making it ideal for **normalizing flows**, **calibration layers**, **monotone neural networks**, tabular feature transforms, and differentiable bijective scalers. The C++17 implementation mirrors the PyTorch API, is tested on Windows/macOS with MSVC/Clang/GCC, and the on-the-fly knot computation uses vectorized barycentric rational interpolation with binary search over the `4N+1` knots for fast, low-latency inference.
 
 ---
 
 ## Embedding Models and Wristband Gaussian Loss (`EmbedModels.py`)
 
-`EmbedModels.py` is a self-contained PyTorch module that provides everything needed to build a **Deterministic Gaussian Autoencoder** &mdash; an autoencoder whose latent space is pushed toward N(0,I) *without* the reparameterization trick, KL divergence, or any stochastic sampling. The file contains five components that compose together into a clean training pipeline: a learnable attention layer for encoding and decoding, a residual network backbone, an invertible normalizing flow for latent-space shaping, and a novel distribution-matching loss. See `DeterministicGAE.py` for a complete working example.
+> 📖 [Full documentation](docs/wristband.md) · 🧪 [GAE example](python/tests/DeterministicGAE.py) · 🧪 [Conditional sampling example](python/tests/GAECondSample.py)
+
+`EmbedModels.py` is a self-contained PyTorch module that provides everything needed to build a **Deterministic Gaussian Autoencoder** — an autoencoder whose latent space is pushed toward N(0,I) *without* the reparameterization trick, KL divergence, or any stochastic sampling. The file contains five components that compose together into a clean training pipeline: a learnable attention layer for encoding and decoding, a residual network backbone, an invertible normalizing flow for latent-space shaping, and a novel distribution-matching loss. See `DeterministicGAE.py` for a complete working example.
 
 ### C_EmbedAttentionModule
 
@@ -35,13 +41,13 @@ A **multi-head softmax attention layer with fully learnable keys and values**. U
 
 **What makes it interesting:**
 
-- **Euclidean attention mode.** Instead of the standard scaled dot-product `<q,k>/sqrt(d)`, the default mode computes `<q,k> - 0.5*||k||^2`, which is the log-kernel of a Gaussian centered at `k`. This makes each basis point act as an RBF prototype &mdash; attention weight decays with squared Euclidean distance from the query to the key, giving the layer a natural "nearest-prototype" inductive bias. The module can also be switched to standard dot-product attention when Euclidean geometry is not appropriate.
+- **Euclidean attention mode.** Instead of the standard scaled dot-product `<q,k>/sqrt(d)`, the default mode computes `<q,k> - 0.5*||k||^2`, which is the log-kernel of a Gaussian centered at `k`. This makes each basis point act as an RBF prototype — attention weight decays with squared Euclidean distance from the query to the key, giving the layer a natural "nearest-prototype" inductive bias. The module can also be switched to standard dot-product attention when Euclidean geometry is not appropriate.
 
 - **Learnable layer-norm temperature.** Logits are passed through a per-basis learned layer-norm scale (and optionally a per-head temperature), giving the network fine-grained control over attention sharpness during training without manual tuning.
 
 - **Rank-1 affine experts.** An optional mode where the value returned for each basis point is not a fixed vector but a query-dependent affine function: `v(q) = v_bias + v_out * (q . v_in)`. This is a rank-1 perturbation that lets each basis point specialize its output based on the query, adding expressiveness at minimal parameter cost. The affine contribution is initialized near zero for training stability.
 
-- **Flexible composition.** The module accepts an optional `q_transform` (applied to queries before attention) and an optional `head_combine` (applied to concatenated head outputs). This makes it easy to drop in any backbone as either the query preprocessor or the output projector &mdash; the example uses `C_ACN` for the head combiner.
+- **Flexible composition.** The module accepts an optional `q_transform` (applied to queries before attention) and an optional `head_combine` (applied to concatenated head outputs). This makes it easy to drop in any backbone as either the query preprocessor or the output projector — the example uses `C_ACN` for the head combiner.
 
 ### C_ACN (Auto-Compressing Network)
 
@@ -59,6 +65,52 @@ output = out_proj(elu(res))
 ```
 
 **Why this matters:** The paper shows that this wiring pattern causes the network to automatically "push" information into earlier layers during training, making later layers progressively more compressible. In practice this means: networks can be pruned aggressively after training (30-80% compression with no accuracy loss in their experiments), they exhibit better noise robustness, and they mitigate catastrophic forgetting in continual learning. In `EmbedModels.py`, ACN is used as the conditioner inside affine coupling layers and as the head combiner for the attention module.
+
+### C_CosineAnnealingWarmRestartsDecay (`CosineAnnealingWarmRestartsDecay.py`)
+
+> A drop-in PyTorch LR scheduler that extends cosine annealing with warm restarts to support **fractional cycle multipliers**, **exponential peak decay**, and **linear warmup** — with O(1) closed-form cycle lookup and rich introspection state.
+
+**Why it exists:** PyTorch's built-in `CosineAnnealingWarmRestarts` requires the cycle multiplier `T_mult` to be an integer, offers no mechanism for decaying the learning rate peak across restarts, and has no warmup support. In practice you almost always want all three: a non-integer growth factor (e.g. 1.5&times;) so cycle lengths increase smoothly, a per-cycle decay so later restarts use smaller peaks as training stabilizes, and a linear warmup at the start to avoid early instability. This scheduler provides all of that in a single class.
+
+**Key features:**
+
+- **Fractional `t_mult`.** Cycle lengths grow by any factor &ge; 1 (e.g. `t_mult=1.5` gives cycles of length 100, 150, 225, ...). The current cycle index and position within it are computed via a closed-form logarithmic formula &mdash; no iteration over past cycles.
+
+- **Exponential peak decay.** The parameter `decay` &isin; [0, 1) controls how much the cosine peak shrinks each cycle. The peak learning rate for cycle *n* is `base_lr * (1 - decay)^n`. Setting `decay=0` recovers the standard non-decaying behavior.
+
+- **Linear warmup.** An optional warmup phase ramps the learning rate from `warmup_start_factor * base_lr` to `base_lr` over `warmup_steps` steps before the cosine-restart schedule begins. The cosine schedule is shifted so that its first peak coincides with the end of warmup.
+
+- **Rich introspection.** After every `step()` call, the scheduler exposes: `cycle` (current cycle index), `t_i` (current cycle length), `t_cur` (position within cycle), `steps_to_cycle_end`, `is_cycle_end` (True on the last step before a restart), and `just_restarted` (True if the last step entered a new cycle). This makes it easy to trigger per-cycle actions like checkpointing, logging, or evaluation without manual bookkeeping.
+
+**Usage:**
+
+```python
+import torch
+from CosineAnnealingWarmRestartsDecay import C_CosineAnnealingWarmRestartsDecay
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+scheduler = C_CosineAnnealingWarmRestartsDecay(
+    optimizer,
+    t_0=200,            # first cycle length (in scheduler steps)
+    t_mult=1.5,         # each subsequent cycle is 1.5x longer
+    eta_min=1e-6,       # minimum learning rate
+    decay=0.1,         # peak decays by 10% per cycle
+    warmup_steps=50,    # linear warmup over first 50 steps
+    warmup_start_factor=0.1,  # warmup starts at 10% of base_lr
+)
+
+for epoch in range(num_epochs):
+    train(...)
+    scheduler.step()
+
+    if scheduler.is_cycle_end:
+        save_checkpoint(...)
+    if scheduler.just_restarted:
+        print(f"Entered cycle {scheduler.cycle}, length {scheduler.t_i:.0f}")
+```
+
+---
 
 ### C_InvertibleFlow (with C_AffineCouplingLayer and C_PermutationLayer)
 
@@ -78,21 +130,23 @@ The flow is a stack of affine coupling layers interleaved with deterministic per
 
 ### C_WristbandGaussianLoss
 
+> 📖 [Full documentation](docs/wristband.md)
+
 A batch loss that encourages a set of samples to follow N(0,I), designed for training deterministic autoencoders. This is the core novel contribution of the module.
 
-**The problem it solves:** In a VAE, the KL divergence provides a per-sample signal pushing the approximate posterior toward the prior. In a deterministic autoencoder there is no per-sample posterior &mdash; you have a batch of point embeddings and you need a loss that says "this batch looks Gaussian." This is surprisingly hard to do well.
+**The problem it solves:** In a VAE, the KL divergence provides a per-sample signal pushing the approximate posterior toward the prior. In a deterministic autoencoder there is no per-sample posterior — you have a batch of point embeddings and you need a loss that says "this batch looks Gaussian." This is surprisingly hard to do well.
 
 **How it works:** The loss decomposes each sample `x` into a direction `u = x/||x||` (a point on the unit sphere) and a radius CDF `t = gammainc(d/2, ||x||^2/2)` (the chi-squared CDF, which is uniform under the null). This `(u, t)` representation is called the "wristband" because it maps the Gaussian cloud onto the product of a sphere and a unit interval. The loss then applies three complementary forces:
 
-**Conceptual origin:** The wristband loss can be understood as an extension of [Wang & Isola's Uniform loss](https://arxiv.org/abs/2005.10242) from the hypersphere to the Gaussian distribution. Wang & Isola showed that a pairwise repulsive kernel on the unit sphere encourages uniform angular distribution of embeddings, and that this is equivalent to optimizing alignment and uniformity in contrastive learning. The wristband loss takes the same core idea &mdash; pairwise soft repulsion via a log-mean-exp kernel &mdash; but applies it to the full `(u, t)` wristband space so that both the angular *and* radial components are pushed toward the distributions implied by N(0,I). Generally, repulsive component is all you need - uniform on a Wristband implies Gaussian in the original space. However we also add a radial W2 term and moment penalty - they speed up convergence and improve robustness (can be turned off for a pure Wang&Isola-style loss function).
+**Conceptual origin:** The wristband loss can be understood as an extension of [Wang & Isola's Uniform loss](https://arxiv.org/abs/2005.10242) from the hypersphere to the Gaussian distribution. Wang & Isola showed that a pairwise repulsive kernel on the unit sphere encourages uniform angular distribution of embeddings, and that this is equivalent to optimizing alignment and uniformity in contrastive learning. The wristband loss takes the same core idea — pairwise soft repulsion via a log-mean-exp kernel — but applies it to the full `(u, t)` wristband space so that both the angular *and* radial components are pushed toward the distributions implied by N(0,I). Generally, repulsive component is all you need - uniform on a Wristband implies Gaussian in the original space. However we also add a radial W2 term and moment penalty - they speed up convergence and improve robustness (can be turned off for a pure Wang&Isola-style loss function).
 
-1. **Joint repulsion** (the main term). A soft Gaussian kernel measures the pairwise "closeness" of samples in the wristband space. To handle the bounded radial coordinate `t in [0,1]`, the kernel uses a **3-image reflection** method: each sample is reflected at both boundaries `t=0` and `t=1`, producing three "copies" whose kernel contributions are summed. This eliminates boundary artifacts that would otherwise push mass toward the edges. The loss is the log-mean of pairwise kernel values &mdash; minimizing it spreads samples apart uniformly.
+1. **Joint repulsion** (the main term). A soft Gaussian kernel measures the pairwise "closeness" of samples in the wristband space. To handle the bounded radial coordinate `t in [0,1]`, the kernel uses a **3-image reflection** method: each sample is reflected at both boundaries `t=0` and `t=1`, producing three "copies" whose kernel contributions are summed. This eliminates boundary artifacts that would otherwise push mass toward the edges. The loss is the log-mean of pairwise kernel values — minimizing it spreads samples apart uniformly.
 
 2. **Radial uniformity.** A 1D squared Wasserstein distance between the sorted `t` values and the quantiles of Unif(0,1). This directly enforces that the radial CDF is uniform, which is equivalent to the radial distribution matching the chi distribution with `d` degrees of freedom. Cheap (just a sort) and provides a strong global signal.
 
 3. **Moment matching.** A configurable penalty on the first and second moments. The default (`"w2"`) is the squared 2-Wasserstein distance between the Gaussian fit to the batch and N(0,I), computed via eigenvalues of the sample covariance. Other options include diagonal/full-covariance KL, half-Jeffreys divergence, or simple mean penalty. This term catches any remaining global drift or variance mismatch.
 
-**Automatic calibration.** At construction time, the loss runs a Monte-Carlo calibration: it draws many batches from N(0,I) and records the mean and standard deviation of each component. During training, each component is z-scored against these null statistics and the weighted sum is divided by its own null standard deviation. This means the total loss is a z-score &mdash; a value near zero means the batch is indistinguishable from Gaussian, and positive values indicate how many standard deviations away from Gaussian it is. This eliminates all scale-dependent hyperparameter tuning: the default weights just work across different batch sizes and dimensions.
+**Automatic calibration.** At construction time, the loss runs a Monte-Carlo calibration: it draws many batches from N(0,I) and records the mean and standard deviation of each component. During training, each component is z-scored against these null statistics and the weighted sum is divided by its own null standard deviation. This means the total loss is a z-score — a value near zero means the batch is indistinguishable from Gaussian, and positive values indicate how many standard deviations away from Gaussian it is. This eliminates all scale-dependent hyperparameter tuning: the default weights just work across different batch sizes and dimensions.
 
 ### Why not other distribution-matching losses?
 
@@ -108,17 +162,19 @@ The specific form of the Wristband Gaussian Loss has been refined over several y
 
 **Sliced Wasserstein distance.** Sliced Wasserstein projects samples onto random 1D directions and compares the resulting 1D distributions. It scales well and avoids the curse of dimensionality that plagues MMD. However, it struggles with two specific issues: angular uniformity (lack thereof), and local dependency (nearby points in the latent space tend to form clumps and correlated patterns that are invisible to random 1D projections but clearly non-Gaussian in the joint distribution). In practice, training with Sliced Wasserstein produces latents whose marginals look reasonable but whose joint structure shows visible local clustering.
 
-**KL divergence (VAE-style).** The standard VAE approach requires the encoder to output mean and log-variance per sample, adding parameters and the reparameterization trick. It also notoriously suffers from posterior collapse (the encoder learns to output the prior, ignoring the input) and requires careful beta-annealing. Crucially, VAEs are **non-deterministic by design**: the same input produces different latent samples on every forward pass due to the injected noise, which is unacceptable in applications that require reproducibility (e.g., financial modeling, scientific simulation, or any system where you need the same input to always produce the same output). The wristband loss operates on point embeddings directly &mdash; the encoder is a plain deterministic function, the mapping is one-to-one, and there is no sampling anywhere in the pipeline.
+**KL divergence (VAE-style).** The standard VAE approach requires the encoder to output mean and log-variance per sample, adding parameters and the reparameterization trick. It also notoriously suffers from posterior collapse (the encoder learns to output the prior, ignoring the input) and requires careful beta-annealing. Crucially, VAEs are **non-deterministic by design**: the same input produces different latent samples on every forward pass due to the injected noise, which is unacceptable in applications that require reproducibility (e.g., financial modeling, scientific simulation, or any system where you need the same input to always produce the same output). The wristband loss operates on point embeddings directly — the encoder is a plain deterministic function, the mapping is one-to-one, and there is no sampling anywhere in the pipeline.
 
-**Flow matching and diffusion models.** Modern diffusion-based approaches (score matching, flow matching, rectified flows) can learn very accurate transport maps from data to Gaussian. However, they are **multi-step iterative processes**: generation requires running an ODE/SDE solver for many steps (typically 20-1000), each step is an approximation, and the transport is learned via denoising objectives that require noise-level scheduling. Some variants are also non-deterministic (SDE-based samplers). In contrast, the Deterministic Gaussian Autoencoder produces the embedding in a **single forward pass** through the encoder and flow &mdash; no iteration, no approximation, no scheduling. The invertible flow is exact, not learned via a simulation-based objective. This makes it orders of magnitude faster at inference and trivially reproducible.
+**Flow matching and diffusion models.** Modern diffusion-based approaches (score matching, flow matching, rectified flows) can learn very accurate transport maps from data to Gaussian. However, they are **multi-step iterative processes**: generation requires running an ODE/SDE solver for many steps (typically 20-1000), each step is an approximation, and the transport is learned via denoising objectives that require noise-level scheduling. Some variants are also non-deterministic (SDE-based samplers). In contrast, the Deterministic Gaussian Autoencoder produces the embedding in a **single forward pass** through the encoder and flow — no iteration, no approximation, no scheduling. The invertible flow is exact, not learned via a simulation-based objective. This makes it orders of magnitude faster at inference and trivially reproducible.
 
-**Density-ratio matching (the Sugiyama trick / GAN-like discriminator).** Train a discriminator network to estimate the density ratio between your batch and samples from the true Gaussian. The generator (encoder) pushes the ratio toward 1. This is theoretically sound — it's effectively a GAN where the "real" distribution is N(0, I). In practice it inherits GAN training pathologies: the discriminator and encoder play a min-max game that is unstable, mode-seeking, and slow to converge. The density-ratio estimator is noisy in moderate dimensions, and the adversarial dynamics introduce a whole separate tuning nightmare (discriminator architecture, learning rate ratio, update schedule).
+**Density-ratio matching (the Sugiyama trick / GAN-like discriminator).** Train a discriminator network to estimate the density ratio between your batch and samples from the true Gaussian. The generator (encoder) pushes the ratio toward 1. This is theoretically sound - it's effectively a GAN where the "real" distribution is N(0, I). In practice it inherits GAN training pathologies: the discriminator and encoder play a min-max game that is unstable, mode-seeking, and slow to converge. The density-ratio estimator is noisy in moderate dimensions, and the adversarial dynamics introduce a whole separate tuning nightmare (discriminator architecture, learning rate ratio, update schedule).
 
 The wristband loss avoids all of these issues. The `(u, t)` decomposition factors the problem into angular and radial components that can each be tested efficiently and, importantly, their *independence* is naturally enforced. The reflected-boundary kernel handles the bounded radial coordinate correctly. The calibration makes component weights self-tuning. The whole computation is O(N^2) in batch size (dominated by the pairwise kernel), fully GPU-parallelizable via standard `einsum` and `softmax` operations, and numerically stable under AMP/mixed-precision. And unlike VAEs or diffusion models, the resulting system is fully deterministic and single-pass: the same input always produces the same embedding, in one forward call.
 
 ---
 
 ## Putting it all together: Deterministic Gaussian Autoencoder
+
+> 🧪 [Basic GAE example](python/tests/DeterministicGAE.py) · 🧪 [Conditional sampling on MNIST](python/tests/GAECondSample.py) · 📖 [Conditional sampling docs](docs/gae_conditional_sampling.md)
 
 The four components above compose into a simple and effective architecture:
 
@@ -144,9 +200,13 @@ Latent z  <-- C_WristbandGaussianLoss is applied here to push z toward N(0,I)
 Reconstruction x_hat  <-- MSE loss against x
 ```
 
-The total loss is simply `lambda_rec * MSE(x, x_hat) + lambda_wb * wristband(z)`. No reparameterization trick, no sampling, no KL balancing, no beta-annealing, no multi-step ODE solving. The flow gives the encoder freedom to produce whatever intermediate representation is best for reconstruction, while the wristband loss ensures that *after* the flow, the latent distribution is Gaussian. Because the flow is exactly invertible, no information is lost in the forward-inverse round trip. The entire pipeline is **deterministic** &mdash; the same input always maps to the same latent code and the same reconstruction, in a **single forward pass**.
+The total loss is simply `lambda_rec * MSE(x, x_hat) + lambda_wb * wristband(z)`. No reparameterization trick, no sampling, no KL balancing, no beta-annealing, no multi-step ODE solving. The flow gives the encoder freedom to produce whatever intermediate representation is best for reconstruction, while the wristband loss ensures that *after* the flow, the latent distribution is Gaussian. Because the flow is exactly invertible, no information is lost in the forward-inverse round trip. The entire pipeline is **deterministic** — the same input always maps to the same latent code and the same reconstruction, in a **single forward pass**.
 
-See `DeterministicGAE.py` for a complete, runnable training script that generates non-Gaussian synthetic data, trains this architecture, and verifies that the latent space converges to N(0,I).
+See [`DeterministicGAE.py`](python/tests/DeterministicGAE.py) for a complete, runnable training script that generates non-Gaussian synthetic data, trains this architecture, and verifies that the latent space converges to N(0,I).
+
+### Conditional Sampling Example
+
+[`GAECondSample.py`](python/tests/GAECondSample.py) demonstrates **deterministic conditional generation** on MNIST. The model splits each digit into top and bottom halves, encodes each through separate encoder+flow paths into a joint Gaussian latent space, and reconstructs the full image from both latents. At inference time, only the bottom half is needed: its latent `z_b` is computed deterministically, while the top-half latent `z_t` is sampled from N(0,I) — each draw produces a different plausible completion. The training combines exact reconstruction, expected conditional reconstruction (averaged over K random `z_t` samples), and the wristband loss on the joint latent. See the [full write-up](docs/gae_conditional_sampling.md) for details.
 
 ---
 
