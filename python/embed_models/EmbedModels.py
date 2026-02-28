@@ -7,7 +7,6 @@ Provides:
   - C_InvertibleFlow       : composable invertible normalizing flow
   - W2ToStandardNormalSq   : squared 2-Wasserstein distance to N(0, I)
   - C_WristbandGaussianLoss: wristband-repulsion loss encouraging N(0, I) latents
-  - C_SpectralWristbandLoss: O(NdK) spectral variant of the wristband loss
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ __all__ = [
    "C_InvertibleFlow",
    "W2ToStandardNormalSq",
    "C_WristbandGaussianLoss",
-   "C_SpectralWristbandLoss",
    "S_LossComponents",
 ]
 
@@ -47,7 +45,7 @@ def EpsForDtype(dtype: torch.dtype, large: bool = False) -> float:
    return math.sqrt(eps) if large else eps
 
 
-# ---- Spectral Neumann helpers (used by C_SpectralWristbandLoss) ----
+# ---- Spectral Neumann helpers (used by C_WristbandLoss) ----
 
 @dataclass(frozen=True)
 class SpectralNeumannCoefficients:
@@ -62,15 +60,15 @@ class SpectralNeumannCoefficients:
    a_k: torch.Tensor
 
 
-def _log_bessel_ive(order: float, c: float) -> float:
+def _LogBesselIve(order: float, c: float) -> float:
    """Logarithm of the exponentially-scaled modified Bessel function I_v(c)*e^{-c}.
 
    scipy.special.ive underflows to 0 when the order v is large (typical at
    high embedding dimension d, since v = d/2 + ell).  No scipy builtin for
    log(ive) exists (scipy/scipy#12607), so we chain three strategies:
 
-   1. ive(v, c) — fast and accurate when it doesn't underflow.
-   2. iv(v, c)  — unscaled; finite for moderate v even when ive rounds to 0.
+   1. ive(v, c): fast and accurate when it doesn't underflow.
+   2. iv(v, c): unscaled; finite for moderate v even when ive rounds to 0.
       We subtract c to recover the log-scaled value.
    3. Leading-term asymptotic: I_v(c) ~ (c/2)^v / Gamma(v+1) when v >> c.
       Accurate in the large-d regime where strategies 1-2 both fail.
@@ -87,7 +85,7 @@ def _log_bessel_ive(order: float, c: float) -> float:
    return float(-c + order * math.log(c / 2.0) - gammaln(order + 1.0))
 
 
-def _angular_eigenvalue_l(d: int, beta: float, alpha: float, ell: int) -> float:
+def _AngularEigenvalueL(d: int, beta: float, alpha: float, ell: int) -> float:
    """Angular eigenvalue for degree-ell spherical harmonics.
 
    lam_ell = Gamma(v+1) * (2/c)^v * I_{ell+v}(c) * e^{-c},
@@ -99,7 +97,7 @@ def _angular_eigenvalue_l(d: int, beta: float, alpha: float, ell: int) -> float:
    nu = 0.5 * (d - 2)
    c  = 2.0 * beta * (alpha ** 2)
    log_prefactor = float(gammaln(nu + 1.0) + nu * (math.log(2.0) - math.log(c)))
-   log_lambda    = log_prefactor + _log_bessel_ive(nu + ell, c)
+   log_lambda    = log_prefactor + _LogBesselIve(nu + ell, c)
    if log_lambda < math.log(float(torch.finfo(torch.float64).tiny)):
       return 0.0
    lam = math.exp(log_lambda)
@@ -108,7 +106,7 @@ def _angular_eigenvalue_l(d: int, beta: float, alpha: float, ell: int) -> float:
    return lam
 
 
-def BuildSpectralNeumannCoefficients(
+def _BuildSpectralNeumannCoefficients(
    d: int, beta: float, alpha: float, k_modes: int,
    *, device: torch.device, dtype: torch.dtype,
 ) -> SpectralNeumannCoefficients:
@@ -116,12 +114,13 @@ def BuildSpectralNeumannCoefficients(
 
    Called once at construction time.  The radial eigenfunctions on [0,1]
    with Neumann BCs are f_0(t)=1, f_k(t)=cos(k*pi*t), with eigenvalues
+   (2*eigenvalues, actually - we are working in unnormalized space)
    a_k = sqrt(pi/beta) * (1 if k==0 else 2*exp(-pi^2*k^2 / (4*beta))).
    """
    if k_modes < 1:
       raise ValueError("k_modes must be >= 1.")
-   lam_0 = _angular_eigenvalue_l(d, beta, alpha, ell=0)
-   lam_1 = _angular_eigenvalue_l(d, beta, alpha, ell=1)
+   lam_0 = _AngularEigenvalueL(d, beta, alpha, ell=0)
+   lam_1 = _AngularEigenvalueL(d, beta, alpha, ell=1)
    beta_t  = torch.as_tensor(beta, device=device, dtype=dtype)
    k_range = torch.arange(k_modes, device=device, dtype=dtype)
    pref    = torch.sqrt(torch.pi / beta_t)
@@ -626,11 +625,11 @@ class C_WristbandGaussianLoss:
 
    The loss maps each sample to a *wristband* representation ``(u, t)`` where
    ``u`` is the unit direction and ``t = gammainc(d/2, ||x||^2/2)`` is the
-   CDF-transformed radius (uniform under the null).  Repulsion is computed
-   with reflecting boundary conditions in ``t`` (3-image method) and a
-   configurable angular kernel on ``u``.
+   CDF-transformed radius (uniform under the null). Repulsion can be computed
+   either exactly with the pairwise reflected kernel, or approximately with a
+   spectral Neumann expansion. 
 
-   All component losses are calibrated by Monte-Carlo sampling from the null
+   All component losses are calibrated by Monte-Carlo sampling from the null 
    distribution at construction time, so the returned ``total`` is a
    zero-mean, unit-variance z-score under :math:`\mathcal{N}(0, I)`.
 
@@ -639,12 +638,18 @@ class C_WristbandGaussianLoss:
    beta : float
        Bandwidth parameter for the Gaussian kernel in the repulsion term.
    alpha : float | None
-       Coupling constant between angular and radial scales.  ``None`` picks
+       Coupling constant between angular and radial scales. ``None`` picks
        a heuristic default that balances the two.
    angular : ``"chordal"`` | ``"geodesic"``
        Metric on the unit sphere for the angular component.
    reduction : ``"per_point"`` | ``"global"``
        Whether repulsion is averaged per-row (per-point) or globally.
+   spectral : bool
+       If ``True``, use the O(N d K) spectral Neumann approximation for the
+       repulsion term. This currently supports only ``angular="chordal"``,
+       ``reduction="global"``, ``lambda_ang=0`` and ``d >= 3``.
+   k_modes : int
+       Number of radial Neumann modes used when ``spectral=True``.
    lambda_rad, lambda_ang, lambda_mom : float
        Weights for the radial-uniformity, angular-uniformity, and moment
        penalty components.
@@ -652,7 +657,7 @@ class C_WristbandGaussianLoss:
        Moment penalty type. One of ``"mu_only"``, ``"kl_diag"``,
        ``"kl_full"``, ``"jeff_diag"``, ``"jeff_full"``, ``"w2"``.
    calibration_shape : tuple[int, int] | None
-       ``(N, D)`` shape for Monte-Carlo calibration.  If provided the loss
+       ``(N, D)`` shape for Monte-Carlo calibration. If provided the loss
        components are normalised to zero mean / unit variance under the null.
    calibration_reps : int
        Number of Monte-Carlo repetitions for calibration.
@@ -665,6 +670,9 @@ class C_WristbandGaussianLoss:
    >>> z = torch.randn(256, 8)
    >>> lc = loss_fn(z)
    >>> lc.total.backward()
+   >>> loss_fn_spec = C_WristbandGaussianLoss(
+   ...    spectral=True, reduction="global", calibration_shape=(256, 8)
+   ... )
    """
 
    def __init__(self, *,
@@ -672,6 +680,8 @@ class C_WristbandGaussianLoss:
       alpha: float | None = None,
       angular: str = "chordal",     # "chordal" or "geodesic"
       reduction: str = "per_point", # "per_point" or "global"
+      spectral: bool = False,
+      k_modes: int = 6,
       lambda_rad: float = 0.1,
       lambda_ang: float = 0.,
       moment: str = "w2",           # "mu_only" | "kl_diag" | "kl_full" | "jeff_diag" | "jeff_full" | "w2"
@@ -689,10 +699,20 @@ class C_WristbandGaussianLoss:
          raise ValueError("reduction must be 'per_point' or 'global'")
       if moment not in ("mu_only", "kl_diag", "kl_full", "jeff_diag", "jeff_full", "w2"):
          raise ValueError("moment must be 'mu_only', 'kl_diag', 'kl_full', 'jeff_diag', 'jeff_full' or 'w2'")
+      if int(k_modes) < 1:
+         raise ValueError("k_modes must be >= 1")
+      if spectral and angular != "chordal":
+         raise ValueError("spectral=True currently supports only angular='chordal'")
+      if spectral and reduction != "global":
+         raise ValueError("spectral=True currently supports only reduction='global'")
+      if spectral and lambda_ang != 0.:
+         raise ValueError("spectral=True currently supports only lambda_ang=0")
 
       self.beta = float(beta)
       self.angular = angular
       self.reduction = reduction
+      self.spectral = bool(spectral)
+      self.k_modes = int(k_modes)
 
       if alpha is None:
          if angular == "chordal":
@@ -708,6 +728,7 @@ class C_WristbandGaussianLoss:
       self.lambda_mom = float(lambda_mom)
       self.eps = 1.e-12
       self.clamp_cos = 1.e-6
+      self._spectral_cache = {}
 
       # Calibration statistics (identity transform when not calibrated)
       self.mean_rep = self.mean_rad = self.mean_ang = self.mean_mom = 0.
@@ -715,11 +736,158 @@ class C_WristbandGaussianLoss:
       self.std_total = 1.
 
       if calibration_shape is not None:
-         self._calibrate(calibration_shape, calibration_reps, calibration_device, calibration_dtype)
+         self._Calibrate(calibration_shape, calibration_reps, calibration_device, calibration_dtype)
+
+   # ---- helpers ----
+
+   def _GetSpectralCoefficients(self, d: int, device: torch.device, dtype: torch.dtype):
+      if d < 3:
+         raise ValueError("spectral=True requires d >= 3")
+      key = (int(d), str(device), dtype)
+      coeffs = self._spectral_cache.get(key)
+      if coeffs is None:
+         coeffs = _BuildSpectralNeumannCoefficients(
+            d=int(d), beta=self.beta, alpha=self.alpha, k_modes=self.k_modes,
+            device=device, dtype=dtype,
+         )
+         self._spectral_cache[key] = coeffs
+      return coeffs
+
+   def _MomentPenalty(self, xw: torch.Tensor) -> torch.Tensor:
+      batch_shape = xw.shape[:-2]
+      mom_pen = xw.new_zeros(batch_shape)
+      if self.lambda_mom == 0.:
+         return mom_pen
+
+      n = int(xw.shape[-2])
+      d = int(xw.shape[-1])
+      n_f, d_f = float(n), float(d)
+      eps = self.eps
+
+      if self.moment == "w2":
+         return W2ToStandardNormalSq(xw, reduction="none") / d_f
+
+      mu = xw.mean(dim=-2)
+
+      if self.moment == "mu_only":
+         return mu.square().mean(dim=-1)
+
+      xc = xw - mu[..., None, :]
+
+      if self.moment == "jeff_diag": # 0.5 * Jeffreys = 0.25*( v + 1/v + mu^2 + mu^2/v - 2 )
+         var = xc.square().sum(dim=-2) / (n_f - 1.)
+         v = var + eps
+         inv_v = v.reciprocal()
+         mu2 = mu.square()
+         return .25 * (v + inv_v + mu2 + mu2 * inv_v - 2.).mean(dim=-1)
+
+      if self.moment == "jeff_full": # 0.5 * Jeffreys (full cov), normalized by d to match per-dim scale: jeff = 0.25*(tr(S)+tr(S^{-1}) + ||mu||^2 + mu^T S^{-1} mu - 2d) / d
+         eps_cov = max(eps, 1.e-6) if xw.dtype == torch.float32 else max(eps, float(torch.finfo(xw.dtype).eps))
+         cov = (xc.transpose(-1, -2) @ xc) / (n_f - 1.)
+         eye = torch.eye(d, device=xw.device, dtype=xw.dtype)
+         cov = cov + eps_cov * eye
+         chol, _ = torch.linalg.cholesky_ex(cov)
+         tr = cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+         inv_cov = torch.cholesky_solve(eye, chol)
+         tr_inv = inv_cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+         mu_col = mu[..., :, None]
+         sol_mu = torch.cholesky_solve(mu_col, chol)
+         mu_inv_mu = (mu_col * sol_mu).sum(dim=(-2, -1))
+         mu2_sum = mu.square().sum(dim=-1)
+         return .25 * (tr + tr_inv + mu2_sum + mu_inv_mu - 2. * d_f) / d_f
+
+      if self.moment == "kl_diag": # KL(N(mu, diag(var)) || N(0, I)) averaged per-dim
+         var = xc.square().sum(dim=-2) / (n_f - 1.)
+         return 0.5 * (var + mu.square() - 1. - torch.log(var + eps)).mean(dim=-1)
+
+      eye = torch.eye(d, device=xw.device, dtype=xw.dtype)
+      cov = (xc.transpose(-1, -2) @ xc) / n_f + eps * eye
+      chol, _ = torch.linalg.cholesky_ex(cov)
+      diag = chol.diagonal(dim1=-2, dim2=-1)
+      logdet = 2.0 * torch.log(diag).sum(dim=-1)
+      tr = cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+      mu2 = mu.square().sum(dim=-1)
+      return 0.5 * (tr + mu2 - d_f - logdet) / d_f
+
+   def _WristbandMap(self, xw: torch.Tensor):
+      d_f = float(xw.shape[-1])
+      s = xw.square().sum(dim=-1).clamp_min(self.eps)   # (..., n)
+      u = xw * torch.rsqrt(s)[..., :, None]             # (..., n, d)
+      a_df = s.new_tensor(.5 * d_f)
+      t = torch.special.gammainc(a_df, .5 * s).clamp(self.eps, 1. - self.eps) # (..., n)
+      return u, t
+
+   def _RadialLoss(self, t: torch.Tensor, n_f: float, dtype: torch.dtype) -> torch.Tensor:
+      t_sorted, _ = torch.sort(t, dim=-1)
+      q = (torch.arange(int(t.shape[-1]), device=t.device, dtype=dtype) + .5) / n_f
+      return 12. * (t_sorted - q).square().mean(dim=-1)
+
+   def _AngularExponent(self, u: torch.Tensor) -> torch.Tensor:
+      g = (u @ u.transpose(-1, -2)).clamp(-1., 1.)    # (..., n, n)
+
+      if self.angular == "chordal": # chordal^2 = ||u_i-u_j||^2 = 2 - 2g, e_ang = -beta * alpha^2 * chordal^2 = 2*beta*alpha^2*(g-1)
+         return (2. * self.beta_alpha2) * (g - 1.)
+
+      theta = torch.acos(g.clamp(-1. + self.clamp_cos, 1. - self.clamp_cos))
+      ang2 = theta.square()
+      ang2 = ang2 - torch.diag_embed(ang2.diagonal(dim1=-2, dim2=-1)) # zero diag without fill_diagonal_ (works for batched)
+      return -self.beta_alpha2 * ang2  # diag 0
+
+   def _AngularUniformity(self, e_ang: torch.Tensor, n_f: float) -> torch.Tensor:
+      if self.reduction == "per_point":
+         row_sum = torch.exp(e_ang).sum(dim=-1) - 1.
+         mean_k = row_sum / (n_f - 1.)
+         return torch.log(mean_k + self.eps).mean(dim=-1) / self.beta
+
+      total = torch.exp(e_ang).sum(dim=(-2, -1)) - n_f
+      mean_k = total / (n_f * (n_f - 1.))
+      return torch.log(mean_k + self.eps) / self.beta
+
+   def _PairwiseRepulsion(self, e_ang: torch.Tensor, t: torch.Tensor, n_f: float) -> torch.Tensor:
+      tc = t[..., :, None]
+      tr = t[..., None, :]
+      diff0 = tc - tr
+      diff1 = tc + tr
+      diff2 = diff1 - 2.
+
+      if self.reduction == "per_point":
+         row_sum  = torch.exp(torch.addcmul(e_ang, diff0, diff0, value=-self.beta)).sum(dim=-1)
+         row_sum += torch.exp(torch.addcmul(e_ang, diff1, diff1, value=-self.beta)).sum(dim=-1)
+         row_sum += torch.exp(torch.addcmul(e_ang, diff2, diff2, value=-self.beta)).sum(dim=-1)
+         row_sum -= 1. # remove only the real self term (=1), keep diagonal mirror terms
+         mean_k = row_sum / (3. * n_f - 1.)
+         return torch.log(mean_k + self.eps).mean(dim=-1) / self.beta
+
+      total  = torch.exp(torch.addcmul(e_ang, diff0, diff0, value=-self.beta)).sum(dim=(-2, -1))
+      total += torch.exp(torch.addcmul(e_ang, diff1, diff1, value=-self.beta)).sum(dim=(-2, -1))
+      total += torch.exp(torch.addcmul(e_ang, diff2, diff2, value=-self.beta)).sum(dim=(-2, -1))
+      total -= n_f # remove n real-self terms (=1)
+      mean_k = total / (3. * n_f * n_f - n_f)
+      return torch.log(mean_k + self.eps) / self.beta
+
+   def _SpectralRepulsion(self, u: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+      d = int(u.shape[-1])
+      n_f, d_f = float(u.shape[-2]), float(d)
+      coeffs = self._GetSpectralCoefficients(d, u.device, u.dtype)
+
+      a_k = coeffs.a_k.to(device=t.device, dtype=t.dtype)
+      k_range = torch.arange(int(a_k.shape[0]), device=t.device, dtype=t.dtype)
+      cos_mat = torch.cos(torch.pi * t[..., :, None] * k_range)        # (..., n, k)
+      c_0k = cos_mat.mean(dim=-2)                                      # (..., k)
+      c_1k = (math.sqrt(d_f) / n_f) * (u.transpose(-1, -2) @ cos_mat) # (..., d, k)
+
+      lam_0_t = torch.as_tensor(coeffs.lam_0, device=t.device, dtype=t.dtype)
+      lam_1_t = torch.as_tensor(coeffs.lam_1, device=t.device, dtype=t.dtype)
+
+      e_total = lam_0_t * (a_k * c_0k.square()).sum(dim=-1)
+      e_total += lam_1_t * (a_k * c_1k.square()).sum(dim=(-2, -1))
+
+      norm_const = torch.clamp_min(lam_0_t * a_k[0], self.eps)
+      return torch.log(torch.clamp_min(e_total / norm_const, self.eps)) / self.beta
 
    # ---- calibration ----
 
-   def _calibrate(self, shape: tuple[int, int], reps: int, device, dtype):
+   def _Calibrate(self, shape: tuple[int, int], reps: int, device, dtype):
       n, d = shape
       if n < 2 or d < 1 or reps < 2:
          return
@@ -790,111 +958,26 @@ class C_WristbandGaussianLoss:
 
       wdtype = torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
       xw = x.to(wdtype)
-      n_f, d_f = float(n), float(d)
-      beta, eps = self.beta, self.eps
+      n_f = float(n)
 
-      mu = xw.mean(dim=-2)                 # (..., d)
-      xc = xw - mu[..., None, :]           # (..., n, d)
+      mom_pen = self._MomentPenalty(xw)
+      u, t = self._WristbandMap(xw)
 
-      # ---- moment penalty ----
-      mom_pen = xw.new_zeros(batch_shape)
-      if self.lambda_mom != 0.:
-         if self.moment == "w2": # squared 2-Wasserstein distance to N(0,I), normalized by d
-            mom_pen = W2ToStandardNormalSq(xw, reduction="none") / d_f
-         elif self.moment == "jeff_diag": # 0.5 * Jeffreys = 0.25*( v + 1/v + mu^2 + mu^2/v - 2 )
-            var = xc.square().sum(dim=-2) / (n_f - 1.)
-            v = var + eps
-            inv_v = v.reciprocal()
-            mu2 = mu.square()
-            mom_pen = .25 * (v + inv_v + mu2 + mu2 * inv_v - 2.).mean(dim=-1)
-         elif self.moment == "jeff_full": # 0.5 * Jeffreys (full cov), normalized by d to match per-dim scale: jeff = 0.25*(tr(S)+tr(S^{-1}) + ||mu||^2 + mu^T S^{-1} mu - 2d) / d
-            eps_cov = max(eps, 1.e-6) if wdtype == torch.float32 else max(eps, float(torch.finfo(wdtype).eps))
-            cov = (xc.transpose(-1, -2) @ xc) / (n_f - 1.)
-            eye = torch.eye(d, device=xw.device, dtype=wdtype)
-            cov = cov + eps_cov * eye
-            chol, info = torch.linalg.cholesky_ex(cov)
-            tr = cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-            inv_cov = torch.cholesky_solve(eye, chol)
-            tr_inv = inv_cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-            mu_col = mu[..., :, None]
-            sol_mu = torch.cholesky_solve(mu_col, chol)
-            mu_inv_mu = (mu_col * sol_mu).sum(dim=(-2, -1))
-            mu2_sum = mu.square().sum(dim=-1)
-            mom_pen = .25 * (tr + tr_inv + mu2_sum + mu_inv_mu - 2. * d_f) / d_f
-         elif self.moment == "mu_only":
-            mom_pen = mu.square().mean(dim=-1)
-         elif self.moment == "kl_diag": # KL(N(mu, diag(var)) || N(0, I)) averaged per-dim
-            var = xc.square().sum(dim=-2) / (n_f - 1.)
-            mom_pen = 0.5 * (var + mu.square() - 1. - torch.log(var + eps)).mean(dim=-1)
-         else: #self.moment == "kl_full": Full-cov forward KL: 0.5*(tr(Sigma)+||mu||^2-d-logdet(Sigma)) / d, (expensive; uses Cholesky; includes correlations intrinsically)
-            eye = torch.eye(d, device=xw.device, dtype=wdtype)
-            cov = (xc.transpose(-1, -2) @ xc) / n_f + eps * eye
-            chol, info = torch.linalg.cholesky_ex(cov)
-            diag = chol.diagonal(dim1=-2, dim2=-1)
-            logdet = 2.0 * torch.log(diag).sum(dim=-1)
-            tr = cov.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-            mu2 = mu.square().sum(dim=-1)
-            mom_pen = 0.5 * (tr + mu2 - d_f - logdet) / d_f
-
-      # ---- wristband map (u, t) ----
-      s = xw.square().sum(dim=-1).clamp_min(eps)      # (..., n)
-      u = xw * torch.rsqrt(s)[..., :, None]           # (..., n, d)
-      a_df = s.new_tensor(.5 * d_f)
-      t = torch.special.gammainc(a_df, .5 * s).clamp(eps, 1. - eps)  # (..., n)
-
-      # ---- radial 1D W2^2 on t vs Unif(0,1) ----
       rad_loss = xw.new_zeros(batch_shape)
       if self.lambda_rad != 0.:
-         t_sorted, _ = torch.sort(t, dim=-1)
-         q = (torch.arange(n, device=xw.device, dtype=wdtype) + .5) / n_f
-         rad_loss = 12. * (t_sorted - q).square().mean(dim=-1)
+         rad_loss = self._RadialLoss(t, n_f, wdtype)
 
-      # ---- angular kernel exponent ----
-      g = (u @ u.transpose(-1, -2)).clamp(-1., 1.)    # (..., n, n)
-
-      if self.angular == "chordal": # chordal^2 = ||u_i-u_j||^2 = 2 - 2g, e_ang = -beta * alpha^2 * chordal^2 = 2*beta*alpha^2*(g-1)
-         e_ang = (2. * self.beta_alpha2) * (g - 1.)
+      if self.spectral:
+         rep_loss = self._SpectralRepulsion(u, t)
+         ang_loss = xw.new_zeros(batch_shape)
       else:
-         theta = torch.acos(g.clamp(-1. + self.clamp_cos, 1. - self.clamp_cos))
-         ang2 = theta.square()
-         ang2 = ang2 - torch.diag_embed(ang2.diagonal(dim1=-2, dim2=-1)) # zero diag without fill_diagonal_ (works for batched)
-         e_ang = -self.beta_alpha2 * ang2  # diag 0
+         e_ang = self._AngularExponent(u)
+         ang_loss = xw.new_zeros(batch_shape)
+         if self.lambda_ang != 0.:
+            ang_loss = self._AngularUniformity(e_ang, n_f)
+         rep_loss = self._PairwiseRepulsion(e_ang, t, n_f)
 
-      # ---- optional angular-only uniformity (O(N^2) exp, computed only if enabled) ----
-      ang_loss = xw.new_zeros(batch_shape)
-      if self.lambda_ang != 0.:
-         if self.reduction == "per_point":
-            row_sum = torch.exp(e_ang).sum(dim=-1) - 1.
-            mean_k = row_sum / (n_f - 1.)
-            ang_loss = torch.log(mean_k + eps).mean(dim=-1) / beta
-         else:  # global
-            total = torch.exp(e_ang).sum(dim=(-2, -1)) - n_f
-            mean_k = total / (n_f * (n_f - 1.))
-            ang_loss = torch.log(mean_k + eps) / beta
-
-      # ---- 3-image reflected kernel for joint (u, t) repulsion ----
-      tc = t[..., :, None]
-      tr = t[..., None, :]
-      diff0 = tc - tr
-      diff1 = tc + tr
-      diff2 = diff1 - 2.
-
-      if self.reduction == "per_point":
-         row_sum  = torch.exp(torch.addcmul(e_ang, diff0, diff0, value=-beta)).sum(dim=-1)
-         row_sum += torch.exp(torch.addcmul(e_ang, diff1, diff1, value=-beta)).sum(dim=-1)
-         row_sum += torch.exp(torch.addcmul(e_ang, diff2, diff2, value=-beta)).sum(dim=-1)
-         row_sum -= 1. # remove only the real self term (=1), keep diagonal mirror terms
-         mean_k = row_sum / (3. * n_f - 1.)
-         rep_loss = torch.log(mean_k + eps).mean(dim=-1) / beta
-      else:
-         total  = torch.exp(torch.addcmul(e_ang, diff0, diff0, value=-beta)).sum(dim=(-2, -1))
-         total += torch.exp(torch.addcmul(e_ang, diff1, diff1, value=-beta)).sum(dim=(-2, -1))
-         total += torch.exp(torch.addcmul(e_ang, diff2, diff2, value=-beta)).sum(dim=(-2, -1))
-         total -= n_f # remove n real-self terms (=1)
-         mean_k = total / (3. * n_f * n_f - n_f)
-         rep_loss = torch.log(mean_k + eps) / beta
-
-      return S_LossComponents(rep_loss, rep_loss, rad_loss, ang_loss, mom_pen) #dummy 'total' - faster this way, avoids nested structure in __call__
+      return S_LossComponents(rep_loss, rep_loss, rad_loss, ang_loss, mom_pen) # dummy 'total' - faster this way, avoids nested structure in __call__
 
    # ---- public interface ----
 
@@ -924,261 +1007,3 @@ class C_WristbandGaussianLoss:
       total = (norm_rep + self.lambda_rad * norm_rad + self.lambda_ang * norm_ang + self.lambda_mom * norm_mom) / self.std_total
 
       return S_LossComponents(total.mean(), norm_rep.mean(), norm_rad.mean(), norm_ang.mean(), norm_mom.mean())
-
-#///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-# C_SpectralWristbandLoss
-#///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class C_SpectralWristbandLoss:
-   r"""Wristband repulsion loss with spectral Neumann kernel — O(NdK) drop-in
-   for :class:`C_WristbandGaussianLoss`.
-
-   Instead of computing all N^2 pairwise kernel evaluations, this class
-   decomposes the product kernel K = k_ang * k_rad into its eigenbasis
-   (spherical harmonics x cosines) and computes the energy as a weighted sum
-   of squared mode projections.  Truncating to l<=1 angular modes and K
-   radial modes gives O(NdK) cost with >99% accuracy at d>=128.
-
-   The ``rep`` component uses the spectral energy; all other components
-   (``rad``, ``mom``) are identical to :class:`C_WristbandGaussianLoss`.
-   Returns the same :class:`S_LossComponents` named tuple.
-
-   Parameters
-   ----------
-   d          : int
-       Embedding dimension (>= 3).
-   beta : float
-       Bandwidth parameter for the Gaussian kernel in the repulsion term.
-   alpha : float | None
-       Coupling constant between angular and radial scales.  ``None`` picks
-       a heuristic default that balances the two.
-   k_modes : int
-       Number of radial Neumann modes K (default 6).
-   lambda_rad, lambda_mom : float
-       Weights for the radial-uniformity and moment penalty components.
-   moment : str
-       Moment penalty type. One of ``"mu_only"``, ``"kl_diag"``, ``"w2"``.
-   calibration_shape : tuple[int, int] | None
-       ``(N, D)`` shape for Monte-Carlo calibration.  If provided the loss
-       components are normalised to zero mean / unit variance under the null.
-   calibration_reps : int
-       Number of Monte-Carlo repetitions for calibration.
-   calibration_device, calibration_dtype
-       Device and dtype for calibration samples.
-
-   Example
-   -------
-   >>> loss_fn = C_SpectralWristbandLoss(d=8, calibration_shape=(256, 8))
-   >>> z = torch.randn(256, 8)
-   >>> lc = loss_fn(z)
-   >>> lc.total.backward()
-   """
-
-   def __init__(self, *,
-      d: int,
-      beta: float = 8.,
-      alpha: float | None = None,
-      k_modes: int = 6,
-      lambda_rad: float = 0.1,
-      moment: str = "w2",           # "mu_only" | "kl_diag" | "w2"
-      lambda_mom: float = 1.,
-      calibration_shape: tuple[int, int] | None = None, # (N, D)
-      calibration_reps: int = 1024,
-      calibration_device: str | torch.device = "cpu",
-      calibration_dtype: torch.dtype = torch.float32,
-   ):
-      if d < 3:
-         raise ValueError("C_SpectralWristbandLoss requires d >= 3")
-      if beta <= 0:
-         raise ValueError("beta must be > 0")
-      if moment not in ("w2", "kl_diag", "mu_only"):
-         raise ValueError("moment must be 'w2', 'kl_diag', or 'mu_only'")
-
-      self.d = int(d)
-      self.beta = float(beta)
-      self.k_modes = int(k_modes)
-
-      if alpha is None:
-         alpha = math.sqrt(1. / 12.) # heuristic so E[(t_i-t_j)^2] (~1/6) matches E[alpha^2 * chordal^2] (E[chordal^2]=2)
-      self.alpha = float(alpha)
-
-      self.lambda_rad = float(lambda_rad)
-      self.moment = moment
-      self.lambda_mom = float(lambda_mom)
-      self.eps = 1.e-12
-
-      dev = torch.device(calibration_device) if isinstance(calibration_device, str) else calibration_device
-      self.coeffs = BuildSpectralNeumannCoefficients(
-         d=self.d, beta=self.beta, alpha=self.alpha, k_modes=self.k_modes,
-         device=dev, dtype=calibration_dtype,
-      )
-
-      # Calibration statistics (identity transform when not calibrated)
-      self.mean_rep = self.mean_rad = self.mean_mom = 0.
-      self.std_rep = self.std_rad = self.std_mom = 1.
-      self.std_total = 1.
-
-      if calibration_shape is not None:
-         self._calibrate(calibration_shape, calibration_reps, calibration_device, calibration_dtype)
-
-   # ---- calibration ----
-
-   def _calibrate(self, shape: tuple[int, int], reps: int, device, dtype):
-      n, d = shape
-      if n < 2 or d != self.d or reps < 2:
-         return
-
-      sum_rep, sum_rad, sum_mom = 0., 0., 0.
-      sum2_rep, sum2_rad, sum2_mom = 0., 0., 0.
-      all_rep, all_rad, all_mom = [], [], []
-
-      with torch.no_grad():
-         for _ in range(int(reps)):
-            x_gauss = torch.randn(int(n), int(d), device=device, dtype=dtype)
-            comp = self._Compute(x_gauss)
-
-            f_rep, f_rad, f_mom = float(comp.rep), float(comp.rad), float(comp.mom)
-            sum_rep += f_rep;  sum2_rep += f_rep * f_rep;  all_rep.append(f_rep)
-            sum_rad += f_rad;  sum2_rad += f_rad * f_rad;  all_rad.append(f_rad)
-            sum_mom += f_mom;  sum2_mom += f_mom * f_mom;  all_mom.append(f_mom)
-
-      reps_f = float(reps)
-      bessel = reps_f / (reps_f - 1.)
-
-      self.mean_rep = sum_rep / reps_f
-      self.mean_rad = sum_rad / reps_f
-      self.mean_mom = sum_mom / reps_f
-
-      var_rep = (sum2_rep / reps_f - self.mean_rep * self.mean_rep) * bessel
-      var_rad = (sum2_rad / reps_f - self.mean_rad * self.mean_rad) * bessel
-      var_mom = (sum2_mom / reps_f - self.mean_mom * self.mean_mom) * bessel
-
-      eps_cal = float(EpsForDtype(dtype, True))
-      self.std_rep = math.sqrt(max(var_rep, eps_cal))
-      self.std_rad = math.sqrt(max(var_rad, eps_cal))
-      self.std_mom = math.sqrt(max(var_mom, eps_cal))
-
-      # Std of the weighted total (for final normalisation)
-      sum_total, sum2_total = 0., 0.
-      for i in range(int(reps)):
-         t_rep = (all_rep[i] - self.mean_rep) / self.std_rep
-         t_rad = self.lambda_rad * (all_rad[i] - self.mean_rad) / self.std_rad
-         t_mom = self.lambda_mom * (all_mom[i] - self.mean_mom) / self.std_mom
-         total = t_rep + t_rad + t_mom
-         sum_total += total
-         sum2_total += total * total
-
-      mean_total = sum_total / reps_f
-      var_total = (sum2_total / reps_f - mean_total * mean_total) * bessel
-      self.std_total = math.sqrt(max(var_total, eps_cal))
-
-   # ---- core computation ----
-
-   def _Compute(self, x: torch.Tensor) -> S_LossComponents:
-      # x: (..., N, D) where N is #samples, D is feature dim
-      if x.ndim < 2:
-         raise ValueError(f"Expected x.ndim>=2 with shape (..., N, D), got {tuple(x.shape)}")
-
-      n = int(x.shape[-2])
-      d = int(x.shape[-1])
-      batch_shape = x.shape[:-2]
-
-      if d != self.d:
-         raise ValueError(f"Expected d={self.d}, got {d}.")
-      if n < 2 or d < 1:
-         z = x.sum(dim=(-2, -1)) * 0.
-         return S_LossComponents(z, z, z, z, z)
-
-      wdtype = torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
-      xw = x.to(wdtype)
-      n_f, d_f = float(n), float(d)
-      beta, eps = self.beta, self.eps
-
-      # ---- moment penalty ----
-      mom_pen = xw.new_zeros(batch_shape)
-      if self.lambda_mom != 0.:
-         if self.moment == "w2":
-            mom_pen = W2ToStandardNormalSq(xw, reduction="none") / d_f
-         elif self.moment == "kl_diag":
-            mu  = xw.mean(dim=-2)
-            xc  = xw - mu[..., None, :]
-            var = xc.square().sum(dim=-2) / (n_f - 1.)
-            mom_pen = 0.5 * (var + mu.square() - 1. - torch.log(var + eps)).mean(dim=-1)
-         else:  # mu_only
-            mom_pen = xw.mean(dim=-2).square().mean(dim=-1)
-
-      # ---- wristband map (u, t) ----
-      s = xw.square().sum(dim=-1).clamp_min(eps)      # (..., n)
-      u = xw * torch.rsqrt(s)[..., :, None]           # (..., n, d)
-      a_df = s.new_tensor(.5 * d_f)
-      t = torch.special.gammainc(a_df, .5 * s).clamp(eps, 1. - eps)  # (..., n)
-
-      # ---- radial 1D W2^2 on t vs Unif(0,1) ----
-      rad_loss = xw.new_zeros(batch_shape)
-      if self.lambda_rad != 0.:
-         t_sorted, _ = torch.sort(t, dim=-1)
-         q = (torch.arange(n, device=xw.device, dtype=wdtype) + .5) / n_f
-         rad_loss = 12. * (t_sorted - q).square().mean(dim=-1)
-
-      # ---- spectral repulsion (replaces the O(N^2) pairwise kernel) ----
-      # Key identity: E[K(W,W')] = sum_{j,k} lam_j * a_k * c_jk^2,
-      # where c_jk = E[phi_j(u) * f_k(t)] are mode projections.
-      # The dominant cost is u.T @ cos_mat: O(NdK).
-      a_k     = self.coeffs.a_k.to(device=t.device, dtype=wdtype)
-      k_range = torch.arange(int(a_k.shape[0]), device=t.device, dtype=wdtype)
-
-      if x.ndim == 2:
-         cos_mat = torch.cos(torch.pi * k_range[None, :] * t[:, None])  # (N, K)
-         c_0k = cos_mat.mean(dim=0)                                      # (K,)
-         c_1k = (math.sqrt(d_f) / n_f) * (u.T @ cos_mat)                # (d, K)
-
-         lam_0_t = torch.as_tensor(self.coeffs.lam_0, device=t.device, dtype=wdtype)
-         lam_1_t = torch.as_tensor(self.coeffs.lam_1, device=t.device, dtype=wdtype)
-
-         e_total = lam_0_t * (a_k * c_0k.square()).sum() + lam_1_t * (a_k[None, :] * c_1k.square()).sum()
-      else:
-         flat_u, flat_t = u.reshape(-1, n, d), t.reshape(-1, n)
-         results = []
-         lam_0_t = torch.as_tensor(self.coeffs.lam_0, device=t.device, dtype=wdtype)
-         lam_1_t = torch.as_tensor(self.coeffs.lam_1, device=t.device, dtype=wdtype)
-         for i in range(flat_u.shape[0]):
-            cos_mat_i = torch.cos(torch.pi * k_range[None, :] * flat_t[i, :, None])
-            c_0k_i = cos_mat_i.mean(dim=0)
-            c_1k_i = (math.sqrt(d_f) / n_f) * (flat_u[i].T @ cos_mat_i)
-            e_i = lam_0_t * (a_k * c_0k_i.square()).sum() + lam_1_t * (a_k[None, :] * c_1k_i.square()).sum()
-            results.append(e_i)
-         e_total = torch.stack(results).reshape(batch_shape)
-
-      norm_const = max(float(self.coeffs.lam_0 * float(self.coeffs.a_k[0])), eps)
-      rep_loss = torch.log(torch.clamp_min(e_total / norm_const, eps)) / beta
-
-      ang_loss = xw.new_zeros(batch_shape)
-      return S_LossComponents(rep_loss, rep_loss, rad_loss, ang_loss, mom_pen)
-
-   # ---- public interface ----
-
-   def __call__(self, x: torch.Tensor) -> S_LossComponents:
-      """Compute the calibrated spectral wristband loss.
-
-      Parameters
-      ----------
-      x : Tensor of shape ``(..., N, D)``
-          Batch of samples (``N`` samples of dimension ``D``).
-
-      Returns
-      -------
-      S_LossComponents
-          Named tuple ``(total, rep, rad, ang, mom)`` where ``total`` is the
-          scalar to back-propagate and the rest are normalised diagnostics.
-      """
-      comp = self._Compute(x)
-
-      # Normalize per-group, then reduce by mean over all leading dims.
-      norm_rep = (comp.rep - self.mean_rep) / self.std_rep
-      norm_rad = (comp.rad - self.mean_rad) / self.std_rad
-      norm_mom = (comp.mom - self.mean_mom) / self.std_mom
-
-      # Weighted sum of normalized components, divided by total std
-      total = (norm_rep + self.lambda_rad * norm_rad + self.lambda_mom * norm_mom) / self.std_total
-
-      return S_LossComponents(total.mean(), norm_rep.mean(), norm_rad.mean(), comp.ang, norm_mom.mean())
