@@ -209,7 +209,10 @@ This `(u, t)` space is the “wristband”: **sphere × interval**.
 **(A) Joint repulsion in wristband space (main term)**
 A soft repulsive kernel spreads points out in `(u, t)`—think Wang & Isola uniformity, but extended to the full Gaussian geometry.
 
-It’s O(N²), built from standard GPU ops (`einsum`, `exp`, `log`, `softmax`‑style patterns).
+Two computation paths are available:
+
+- **Pairwise (default):** O(N²) reflected kernel, built from standard GPU ops (`einsum`, `exp`, `log`, `softmax`‑style patterns). Uses a 3‑image reflection trick on the bounded radial coordinate (details below).
+- **Spectral Neumann (`spectral=True`):** O(N·d·K) approximation that avoids the N² pairwise matrix entirely. It expands the reflected kernel in a spectral basis (Neumann eigenfunctions on [0,1] × spherical harmonics on S^{d−1}) and computes the loss from a handful of cheap summary statistics. See the “Spectral Neumann approximation” section below.
 
 **(B) Radial uniformity (cheap, strong global signal)**
 Because `t` should be uniform, we can enforce it directly with a 1D Wasserstein²‑on‑quantiles term:
@@ -265,6 +268,54 @@ In code, that shows up as the three differences:
 Summing those three kernel contributions makes the “crowdedness estimate” behave as if the interval continued smoothly beyond its ends, **removing the fake low-density attraction to boundaries**.
 
 That’s what the reflection is really doing: **boundary bias correction**, not “preventing edge repulsion.”
+
+---
+
+## Spectral Neumann approximation (new: O(N·d·K) path)
+
+The pairwise 3-image kernel is exact but O(N²) in batch size, which becomes a bottleneck for very large batches. The spectral path (`spectral=True`) avoids materialising the N×N kernel matrix altogether.
+
+### Core idea
+
+The reflected kernel on the wristband sphere×interval can be expanded in a product basis of **spherical harmonics** on the sphere and **cosine (Neumann) eigenfunctions** on [0, 1]:
+
+```
+K(u_i,t_i ; u_j,t_j)  =  Σ_{ell,k}  λ_ell  · a_k  · Y_ell(u_i)·Y_ell(u_j)  · cos(kπ t_i)·cos(kπ t_j)
+```
+
+where `λ_ell` are angular eigenvalues (expressed via modified Bessel functions) and `a_k` are radial Neumann coefficients.
+
+The key observation is that, after the expansion, the double sum over pairs collapses into sums of **squared batch statistics**:
+
+```
+Σ_{i,j} K(i,j)  =  N² · λ_0 · Σ_k a_k · c_{0,k}²   +   N² · λ_1 · Σ_k a_k · ||c_{1,k}||²
+```
+
+where `c_{0,k} = (1/N)Σ_i cos(kπ t_i)` is a scalar and `c_{1,k} = (√d/N)Σ_i u_i cos(kπ t_i)` is a d-vector. Computing these costs O(N·K) and O(N·d·K) respectively, and the final contraction is O(d·K). No N×N matrix is ever formed.
+
+### When to use it
+
+The spectral path is a drop-in replacement for the pairwise kernel under a few constraints (which may be relaxed in future versions):
+
+- `angular="chordal"` (the default)
+- `reduction="global"`
+- `lambda_ang=0` (no separate angular-uniformity penalty; the spectral kernel already enforces it)
+- Embedding dimension `d ≥ 3`
+
+Under these settings, `spectral=True` gives the same loss surface (up to the truncation at `k_modes` radial modes) at significantly lower cost when N is large.
+
+### Usage
+
+```python
+loss_fn = C_WristbandGaussianLoss(
+    spectral=True,
+    reduction="global",
+    k_modes=6,               # number of radial Neumann modes (default 6)
+    calibration_shape=(4096, 32),
+)
+```
+
+The angular eigenvalues and radial coefficients are computed once at construction time (using log-domain Bessel functions to avoid overflow/underflow at high d) and cached. Only the cheap batch statistics are recomputed on every forward call.
 
 ---
 
@@ -359,6 +410,6 @@ The “aha” for me was realizing:
 * **sphere uniformity is a great local repulsion trick**
 * but **Gaussianity is the composable interface** you want for modular factors, counterfactuals, and “swap‑a‑submodel” workflows
 
-Wristband is basically: *take the best part of uniform-on-sphere, extend it to the full Gaussian geometry, fix the boundary issues correctly, and make it self-calibrating so it’s usable.*
+Wristband is basically: *take the best part of uniform-on-sphere, extend it to the full Gaussian geometry, fix the boundary issues correctly, and make it self-calibrating so it’s usable.* And with the new spectral Neumann path, it scales to large batches without giving up the reflected‑boundary correctness.
 
 If you’ve ever fought deterministic distribution matching in latent spaces (especially when you care about factorization/composability), I’d genuinely love to hear how this behaves on your nastiest cases.
