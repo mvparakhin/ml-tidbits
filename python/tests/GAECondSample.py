@@ -37,6 +37,79 @@ from embed_models.EmbedModels import C_InvertibleFlow, C_ACN, C_WristbandGaussia
 from schedulers.Schedulers import C_CosineAnnealingWarmRestartsDecay
 
 
+#//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+# Ensure cl.exe is discoverable (TorchInductor needs it on Windows). If cl.exe already on PATH, does nothing.
+# Otherwise uses vswhere -> vcvars64.bat/VsDevCmd.bat and imports env.
+#//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+def EnsureMSVCEnv() -> None:
+   #//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+   # Load environment variables from a Windows batch file into the current process
+   #//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+   def _LoadEnvFromBat(bat_path: str, bat_args: str = "") -> None:
+      bat_path = os.fspath(bat_path)
+      if not Path(bat_path).is_file():
+         raise FileNotFoundError(bat_path)
+      # Pass ONE string to subprocess on Windows to avoid Python inserting \" escapes, use cmd's native quote-escaping (double the quotes) inside the /c "..."
+      cmdline = f'cmd.exe /d /s /c "call "{bat_path}" {bat_args} && set"'
+      out = subprocess.check_output(cmdline, text=True, stderr=subprocess.STDOUT,)
+      for line in out.splitlines():
+         if "=" not in line:
+            continue
+         k, v = line.split("=", 1)
+         if k and not k.startswith("="):
+            os.environ[k] = v
+
+   import shutil, subprocess
+   from pathlib import Path
+
+   if shutil.which("cl.exe"):
+      return
+
+   program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+   vswhere = Path(program_files_x86) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+   if not vswhere.exists():
+      raise RuntimeError(f"vswhere.exe not found at: {vswhere}")
+   
+   install_path = subprocess.check_output( # Find latest VS with VC tools installed
+      [
+         str(vswhere),
+         "-latest",
+         "-products", "*",
+         "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+         "-property", "installationPath",
+      ],
+      text=True,
+   ).strip()
+
+   if not install_path:
+      raise RuntimeError(
+         "No Visual Studio installation with C++ (VC Tools x86/x64) found. "
+         "Open Visual Studio Installer and add 'Desktop development with C++' / MSVC build tools."
+      )
+   install_path = Path(install_path)
+
+   # Prefer vcvars64.bat; fall back to VsDevCmd.bat
+   vcvars64 = install_path / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+   vsdevcmd = install_path / "Common7" / "Tools" / "VsDevCmd.bat"
+
+   if vcvars64.exists():
+      _LoadEnvFromBat(str(vcvars64))
+   elif vsdevcmd.exists():
+      # VsDevCmd supports args; force 64-bit tools
+      _LoadEnvFromBat(str(vsdevcmd), "-arch=amd64 -host_arch=amd64")
+   else:
+      raise RuntimeError(
+         f"Couldn't find vcvars64.bat or VsDevCmd.bat under: {install_path}"
+      )
+   cl = shutil.which("cl.exe") # Verify
+   if not cl:
+      raise RuntimeError(
+         "Tried to activate MSVC environment, but cl.exe is still not on PATH.\n"
+         f"VS install: {install_path}\n"
+         f"PATH now: {os.environ.get('PATH','')[:4000]}..."
+      )
+   #print(f"MSVC active: cl.exe = {cl}")
+
 ##########################################################################################################################################################################################
 def SplitTopBottom(x):
    """Split a (B,1,28,28) MNIST image into top and bottom halves, each (B,1,14,28)."""
@@ -412,6 +485,8 @@ def Main():
    x_test, _ = next(iter(test_loader))
    ShowConditionalSamples(model, x_test, device)
 
-
 if __name__ == "__main__":
+   torch.multiprocessing.freeze_support()
+   if sys.platform == "win32":
+      EnsureMSVCEnv()
    Main()
