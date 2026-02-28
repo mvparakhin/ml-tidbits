@@ -729,6 +729,7 @@ class C_WristbandGaussianLoss:
       self.eps = 1.e-12
       self.clamp_cos = 1.e-6
       self._spectral_cache = {}
+      self._spectral_cache_signature = None
 
       # Calibration statistics (identity transform when not calibrated)
       self.mean_rep = self.mean_rad = self.mean_ang = self.mean_mom = 0.
@@ -743,7 +744,12 @@ class C_WristbandGaussianLoss:
    def _GetSpectralCoefficients(self, d: int, device: torch.device, dtype: torch.dtype):
       if d < 3:
          raise ValueError("spectral=True requires d >= 3")
-      key = (int(d), str(device), dtype)
+      signature = (self.beta, self.alpha, self.k_modes)
+      if self._spectral_cache_signature != signature:
+         self._spectral_cache.clear()
+         self._spectral_cache_signature = signature
+
+      key = (int(d), device, dtype)
       coeffs = self._spectral_cache.get(key)
       if coeffs is None:
          coeffs = _BuildSpectralNeumannCoefficients(
