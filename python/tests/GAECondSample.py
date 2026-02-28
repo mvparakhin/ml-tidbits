@@ -384,7 +384,7 @@ def Main():
 
    # -- Wristband Gaussian loss -------------------------------------------
    #  Calibrated reference statistics for N(0,I) samples of shape (BATCH, d).
-   wristband = C_WristbandGaussianLoss(calibration_shape=(BATCH, model.d), reduction="global", spectral=False)
+   wristband = C_WristbandGaussianLoss(calibration_shape=(BATCH, model.d))
    print(f"Wristband calibrated: shape=({BATCH}, {model.d})\n")
 
    # -- Training setup ----------------------------------------------------
