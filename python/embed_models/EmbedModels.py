@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
