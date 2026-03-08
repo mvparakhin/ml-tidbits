@@ -332,13 +332,14 @@ class C_AffineCouplingLayer(nn.Module):
       self.dim = dim
       self.s_max = float(s_max)
 
-      if mask.ndim != 1 or int(mask.numel()) != dim:
+      if mask.ndim != 1 or int(mask.numel()) != dim: # mask: 1 => pass-through, 0 => transformed
          raise ValueError("mask must have shape (dim,)")
 
       m = mask.to(dtype=torch.float32).contiguous()
       self.register_buffer("mask", m)
       self.register_buffer("inv_mask", 1. - m)
 
+      # Indices for pass-through and transformed parts.
       pass_idx  = torch.nonzero(m >= 0.5, as_tuple=False).flatten().to(dtype=torch.int64)
       trans_idx = torch.nonzero(m <  0.5, as_tuple=False).flatten().to(dtype=torch.int64)
 
@@ -347,7 +348,7 @@ class C_AffineCouplingLayer(nn.Module):
       self.pass_dim = int(pass_idx.numel())
       self.trans_dim = int(trans_idx.numel())
 
-      if self.pass_dim < 1 or self.trans_dim < 1:
+      if self.pass_dim < 1 or self.trans_dim < 1: # If the mask is degenerate, behave as identity (shouldn't happen in your current flow construction).
          self.net = None
          self._contig = True
          self._pass_first = True
@@ -371,9 +372,9 @@ class C_AffineCouplingLayer(nn.Module):
          nn.init.zeros_(self.net.out_proj.bias)
 
    def _ST(self, x_pass: torch.Tensor):
-      st = self.net(x_pass)
+      st = self.net(x_pass)  # (..., 2*trans_dim)
       s_raw, t = st.chunk(2, dim=-1)
-      s = torch.tanh(s_raw) * self.s_max
+      s = torch.tanh(s_raw) * self.s_max # Bound log-scale for stability.
       return s, t
 
    def forward(self, x: torch.Tensor):
@@ -396,6 +397,7 @@ class C_AffineCouplingLayer(nn.Module):
             y_trans = x_trans * torch.exp(s) + t
             return torch.cat((y_trans, x_pass), dim=-1)
 
+      # General (non-contiguous) mask: gather/scatter.
       x_pass  = torch.index_select(x, -1, self.pass_idx)
       x_trans = torch.index_select(x, -1, self.trans_idx)
       s, t = self._ST(x_pass)
@@ -410,6 +412,7 @@ class C_AffineCouplingLayer(nn.Module):
    def inverse(self, y: torch.Tensor):
       if y.shape[-1] != self.dim:
          raise ValueError(f"Expected last dim == {self.dim}, but got {int(y.shape[-1])}")
+
       if self.net is None:
          return y
 
@@ -489,7 +492,7 @@ class C_InvertibleFlow(nn.Module):
       ops: list[nn.Module] = []
       if self.n_layers > 0 and self.dim >= 2:
          idx = torch.arange(self.dim, dtype=torch.int64)
-         d1 = self.dim // 2
+         d1 = self.dim // 2  # floor half; handles odd dims
 
          # Base half masks in current coordinate order.
          mask0 = torch.zeros((self.dim,), dtype=torch.float32)
@@ -567,9 +570,11 @@ def W2ToStandardNormalSq(x: torch.Tensor, *, reduction: str = "mean") -> torch.T
    if b < 2:
       raise ValueError("Need B>=2 for covariance (denominator B-1).")
 
+   # Use float32 for stable/fast linalg on GPU (eigvalsh typically wants float32/64).
    work_dtype = torch.float32 if x.dtype in (torch.float16, torch.bfloat16) else x.dtype
    xw = x.to(dtype=work_dtype)
 
+   # Center
    mu = xw.mean(dim=-2, keepdim=True)          # (..., 1, d)
    xc = xw - mu                                # (..., B, d)
    mu2 = mu.squeeze(-2).square().sum(dim=-1)   # (...,)
@@ -586,8 +591,9 @@ def W2ToStandardNormalSq(x: torch.Tensor, *, reduction: str = "mean") -> torch.T
 
    # Eigenvalues of PSD matrix (sorted). For Gram, these are the nonzero eigenvalues of Sigma.
    eig = torch.linalg.eigvalsh(m)
-   eig = eig.clamp_min(0.)
+   eig = eig.clamp_min(0.)  # protect against tiny negative numerical noise
 
+   # BW^2(Sigma, I) = sum_i (sqrt(lambda_i) - 1)^2, adding eps inside sqrt to avoid infinite gradient if some eigenvalues hit exactly 0.
    sqrt_eig = torch.sqrt(eig + EpsForDtype(eig.dtype))
    bw2 = (sqrt_eig - 1.).square().sum(dim=-1)
 
@@ -595,7 +601,7 @@ def W2ToStandardNormalSq(x: torch.Tensor, *, reduction: str = "mean") -> torch.T
    if d > m_dim:
       bw2 = bw2 + (d - m_dim)
 
-   loss = mu2 + bw2 # canonical coefficient on mean term is 1
+   loss = mu2 + bw2  # canonical coefficient on mean term is 1
 
    if reduction == "none":
       return loss
