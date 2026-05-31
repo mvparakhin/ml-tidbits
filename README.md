@@ -12,7 +12,9 @@ C++ components are all tested on Windows and Mac, gcc, clang and Visual Studio 2
 |---|---|
 | `LRSplines.py` | `UnifiedMonotonicSpline` — invertible monotone rational linear spline layer · [docs](docs/mlrsplines.md) |
 | `EmbedModels.py` | Learnable Euclidean attention, auto-compressing networks, invertible flows, and the **Wristband Gaussian Loss** for deterministic Gaussian autoencoders · [docs](docs/wristband.md) |
+| `RankingLoss.py` | `C_RankingLoss` — configurable pairwise **learning-to-rank** loss (RankNet surrogate + optional LambdaRank/DCG weighting) in one stateless tensor expression, with `1 - weighted Kendall tau` semantics · [docs](docs/ranking_loss.md) · [source](python/ranking/RankingLoss.py) |
 | `TestLRSplines.py` | Tests and training examples for `LRSplines.py` · [source](python/tests/TestLRSplines.py) |
+| `TestRankingLoss.py` | Tests and a training example for `RankingLoss.py` · [source](python/tests/TestRankingLoss.py) |
 | `DeterministicGAE.py` | End-to-end example: **Deterministic Gaussian Autoencoder** built from the modules in `EmbedModels.py` · [source](python/tests/DeterministicGAE.py) |
 | `GAECondSample.py` | **Deterministic Conditional Sampling** on MNIST: trains a split-encoder GAE to inpaint missing image halves, demonstrating conditional generation by sampling from the learned Gaussian latent space · [docs](docs/gae_conditional_sampling.md) · [source](python/tests/GAECondSample.py) |
 | `CosineAnnealingWarmRestartsDecay.py` | `C_CosineAnnealingWarmRestartsDecay` — cosine annealing with warm restarts, fractional cycle growth, exponential peak decay, and linear warmup |
@@ -26,6 +28,43 @@ C++ components are all tested on Windows and Mac, gcc, clang and Visual Studio 2
 > 📖 [Full documentation](docs/mlrsplines.md) · 🧪 [Tests & examples](python/tests/TestLRSplines.py)
 
 **Why it's cool:** `UnifiedMonotonicSpline` is an **invertible, batched monotonic rational linear spline** module available in both **PyTorch** and **modern C++**, using one **unconstrained parameterization** (`8N+1` or `8N+3` if uncentered) shared across languages. It guarantees monotonicity by construction (exponential spacing/derivative params), provides stable **forward and inverse** transforms with linear tails, and exposes **analytic derivatives** (and inverse-gradients via the implicit function theorem) for seamless training — including an optimized `forward(return_deriv=True)` path that computes both value and derivative in a single pass sharing knot calculation and bin search. The PyTorch module is fully **TorchScript-compatible** (`torch.jit.script`) for deployment without Python overhead. You can run it with **internal weights** (single spline applied to many values) or **external weights** (per-example splines in a batch), making it ideal for **normalizing flows**, **calibration layers**, **monotone neural networks**, tabular feature transforms, and differentiable bijective scalers. The C++17 implementation mirrors the PyTorch API, is tested on Windows/macOS with MSVC/Clang/GCC, and the on-the-fly knot computation uses vectorized barycentric rational interpolation with binary search over the `4N+1` knots for fast, low-latency inference.
+
+---
+
+## Configurable Pairwise Ranking Loss (`RankingLoss.py`)
+
+> A single-expression, fully-batched **learning-to-rank** loss &mdash; a RankNet sigmoid surrogate with an optional detached **LambdaRank/DCG** pair weight. Gain and discount are independent toggles, and the gain can come from graded labels (`2 ** relevance`) or from rank position.
+>
+> 📖 [Full documentation](docs/ranking_loss.md) · 🧪 [Source](python/ranking/RankingLoss.py) · 🧪 [Tests & training example](python/tests/TestRankingLoss.py)
+
+**Why it's cool:** `C_RankingLoss` collapses RankNet, LambdaRank, and DCG into one stateless tensor expression over `[..., N]` `scores` and `labels` (last axis = one group to rank; leading axes = independent groups). For every pair with `labels_i > labels_j` it pushes `scores_i > scores_j` through a sigmoid surrogate, optionally weighting each pair by the change in DCG that swapping it would cause: `|gain_i - gain_j| * |discount_i - discount_j|`. The whole thing is built from `N x N` broadcasts: the pairs come from a `labels_i > labels_j` mask and any ranks (for the discount and position gain) from comparison counts -- an item's rank is `(x_j > x_i).sum(...)`, the number of items that beat it -- so there is **no sorting, no precomputed pair indices, no gather, no buffers, and no state**. The returned value has a clean interpretation: it is exactly `1 - (weighted Kendall tau)`, so **0 is a perfect ranking, 1 is random, and 2 is fully reversed**.
+
+**Configurable:**
+
+- **`gain`** &mdash; `"none"` (every orderable pair weighted equally), `"label"` (`gain_base ** relevance`, the classic DCG gain), or `"position"` (`gain_base ** normalized-ideal-rank`, for when only the label *order* is meaningful, not its scale).
+- **`discount`** &mdash; on/off toggle for the standard DCG positional discount `1/log2(model_rank + 2)`, recomputed from the current scores so it acts as a LambdaRank-style swap importance (top-of-list mistakes count more).
+- **`rank_scale`** &mdash; steepness of the sigmoid surrogate; as it grows the soft loss approaches the hard 0/1 inversion count, also available directly via `hard=True` for an honest evaluation metric.
+
+**Usage:**
+
+```python
+import torch
+from RankingLoss import C_RankingLoss
+
+# Graded-relevance ranking (textbook LambdaRank/DCG): 2**label gain + log2 discount
+loss = C_RankingLoss(gain="label", discount=True)
+scores = torch.randn(32, 10, requires_grad=True)     # 32 groups, 10 items each
+labels = torch.randint(0, 5, (32, 10)).float()       # graded relevance 0..4
+loss(scores, labels).backward()
+
+# Position-as-gain: only the order of `labels` matters, not its magnitude
+rank_only = C_RankingLoss(gain="position", gain_base=32.)
+
+# Plain RankNet (uniform weights); or an honest hard metric for eval (1 - weighted Kendall tau)
+plain = C_RankingLoss(gain="none", discount=False)
+with torch.inference_mode():
+    metric = loss(scores, labels, hard=True)         # in [0, 2]; lower is better
+```
 
 ---
 
