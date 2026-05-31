@@ -53,7 +53,7 @@ For training, the hard 0/1 "is this pair inverted?" indicator is replaced by the
 
 The per-pair weight is `w_ij = [gain] * [discount]`, both optional:
 
-- **`gain="none"`** -- weight 1 on every orderable pair (plain RankNet / unweighted Kendall tau).
+- **`gain="none"`** -- weight 1 on every pair; a tied-label pair is a neutral `0.5` and is still counted (normalized by all pairs), i.e. tau-a / plain RankNet.
 - **`gain="label"`** -- `gain_i = gain_base ** labels_i`. With `gain_base=2` this is the textbook DCG gain `2 ** relevance`; the label *magnitudes* set the weight.
 - **`gain="position"`** -- `gain_i = gain_base ** ((N-1 - rank_i) / (N-1))`, where `rank_i` is the (tie-averaged) position of item `i` in the ideal label order. Only the label *order* matters, which is robust when label magnitudes are arbitrary.
 - **`discount`** -- when True, multiply by `|1/log2(rank_i + 2) - 1/log2(rank_j + 2)|`, where `rank` is the item's position in the model's current score order (0 = top). This is the standard DCG `log2` discount; it makes the weight a LambdaRank swap importance, so top-of-list mistakes count more.
@@ -64,11 +64,14 @@ The per-pair weight is `w_ij = [gain] * [discount]`, both optional:
 
 ```python
 C_RankingLoss(*, gain="label", discount=True, gain_base=2., rank_scale=2.)
-loss(scores, labels, hard=False) -> scalar tensor
+loss(scores, labels, hard=False, reduce=True) -> scalar tensor (per-group tensor if reduce=False)
+loss.Contrast(a, b, hard=False, reduce=True)  -> symmetric rank-agreement between two prediction vectors
 ```
 
 - `scores`, `labels`: same shape `[..., N]`; a higher label means the item should rank higher.
 - `hard=False`: differentiable sigmoid surrogate (training). `hard=True`: exact `1 - weighted tau` in `[0, 2]` (evaluation; no useful gradient).
+- `reduce=True` (default): scalar mean over groups. `reduce=False`: per-group tensor (shape = the leading axes), one loss per independent group -- useful when groups must be weighted or logged separately.
+- `Contrast(a, b)`: a *contrastive* variant for two differentiable prediction vectors -- the symmetric mean of ranking `a` by `b`'s order and `b` by `a`'s order. Uses `rank_scale` only (no gain/discount), shares the pairwise difference matrices (so it costs about the same as one ordinary call), and back-props into both `a` and `b`.
 - The object is **not** an `nn.Module` (it has no parameters) -- construct it once and call it.
 
 ## Usage
@@ -101,6 +104,6 @@ loss(torch.tensor([1.0, 0.2, 0.5]), torch.tensor([2., 0., 1.]))
 ## Design notes
 
 - **Tie handling (and why there is still no sort).** A rank is `(x_j > x_i).sum()` -- the count of strictly-greater items, a pure value comparison, so the inputs need not be ordered. Only *ties* need a convention. The score discount uses *ordinal* ranks: it adds a count of equal-valued *earlier* items (`eq.tril(-1).sum`, where `eq` is the equality matrix), so tied scores still get distinct ranks. Here `tril`'s `i > j` is the items' **tensor position**, not their value -- an index-based tie-break identical to a stable `argsort`, applied only to ties, which is what keeps a gradient even when all scores tie. Label-position gain instead uses *average* ranks (`0.5 * (eq.sum - 1)`), so equally-relevant items share one gain with no positional bias. For distinct values the two modes coincide.
-- **Degenerate groups.** A group with all-equal labels has no orderable pair; it is excluded from the mean (not counted as a perfect 0). If no group has an orderable pair the loss is 0.
+- **Degenerate groups.** With a gain (`"label"`/`"position"`) a tied-label pair has zero weight, so an all-equal-label group is excluded from the mean (not a perfect 0); if no group has an orderable pair the loss is 0. With `gain="none"` every pair counts, so an all-equal-label group scores 1.0 (all pairs neutral) -- the no-skill baseline.
 - **Dtype.** The detached weight math runs in `scores.dtype`, so passing `float64` labels does not silently promote the loss (or its gradient) to double precision.
 - **Cost.** `O(N^2)` per group via dense `N x N` broadcasts -- well suited to the small-to-moderate group sizes typical of learning-to-rank. The object is stateless and `torch.compile`-friendly (the `gain`/`discount` branches are static Python).

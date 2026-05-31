@@ -74,6 +74,15 @@ def TestTieHandlingAndEdges():
    out = C_RankingLoss(gain="label", discount=True)(torch.randn(4, 5), torch.randint(0, 4, (4, 5)).double())
    print(f"   float64 labels -> loss dtype {out.dtype} (expect torch.float32)")
    assert out.dtype == torch.float32, f"float64 labels promoted the loss to {out.dtype}"
+
+   # gain="none" keeps tied-label pairs as a neutral 0.5 (tau-a), normalized by ALL pairs.
+   none = C_RankingLoss(gain="none", discount=False)
+   const_target = float(none(torch.randn(7), torch.ones(7), hard=True))            # every pair tied -> exactly 1.0
+   # labels [1,1,0], scores [2,1,0]: pair (0,1) tied=0.5, (0,2)&(1,2) concordant=0 -> 2*0.5/3 = 1/3
+   tie_val = float(none(torch.tensor([2., 1., 0.]), torch.tensor([1., 1., 0.]), hard=True))
+   print(f"   gain=none ties: constant-target={const_target:.4f} (expect 1.0)   partial-tie={tie_val:.6f} (expect {1. / 3.:.6f})")
+   assert abs(const_target - 1.) < 1.e-6, "gain=none constant target must be 1.0 (ties = 0.5)"
+   assert abs(tie_val - 1. / 3.) < 1.e-6, f"gain=none tied pair must count as 0.5, got {tie_val}"
    return dict(tied_soft=soft, tied_grad_l1=grad_l1)
 
 
@@ -95,6 +104,14 @@ def TestExactValueAndShapes():
    batched = float(f(s.expand(4, 5), y.expand(4, 5)))
    print(f"   single [N]={single:.6f}   batched [B,N]={batched:.6f} (must match)")
    assert abs(single - batched) < 1.e-6, "single-group and batched results must agree"
+
+   # reduce=False returns one value per group; reduce=True is their (valid-group) mean.
+   torch.manual_seed(3)
+   sb = torch.randn(4, 6); yb = torch.rand(4, 6)            # distinct labels -> all groups valid
+   per_group = f(sb, yb, reduce=False)
+   print(f"   reduce=False shape={tuple(per_group.shape)}   mean={float(per_group.mean()):.6f}   reduce=True={float(f(sb, yb)):.6f}")
+   assert tuple(per_group.shape) == (4,), f"reduce=False should be per-group [4], got {tuple(per_group.shape)}"
+   assert abs(float(per_group.mean()) - float(f(sb, yb))) < 1.e-6, "reduce=True must equal the per-group mean"
    return dict(hand_value=got)
 
 
@@ -125,6 +142,24 @@ def TestTrainingConverges(*, n_groups: int = 8, n: int = 12, steps: int = 400, l
    return dict(start_hard=start_hard, final_hard=final_hard, start_soft=start_soft, final_soft=final_soft)
 
 
+def TestContrast():
+   """Contrast(a, b) is the symmetric mean of ranking a by b and b by a (shares diffs); matches the two-call form."""
+   torch.manual_seed(0)
+   loss = C_RankingLoss(gain="none", discount=False, rank_scale=2.)
+   a = torch.randn(5, 9); b = torch.randn(5, 9)            # 5 independent groups, 9 items each
+   c = loss.Contrast(a, b, reduce=False)
+   two_call = 0.5 * (loss(a, b, reduce=False) + loss(b, a, reduce=False))
+   sym = loss.Contrast(b, a, reduce=False)
+   print(f"TestContrast: vs two-call max|d|={float((c - two_call).abs().max()):.2e}   symmetric max|d|={float((c - sym).abs().max()):.2e}")
+   assert torch.allclose(c, two_call, atol=1.e-6), "Contrast must equal 0.5*(crl(a,b) + crl(b,a))"
+   assert torch.allclose(c, sym, atol=1.e-6), "Contrast must be symmetric in (a, b)"
+   a2 = a.clone().requires_grad_(True); b2 = b.clone().requires_grad_(True)
+   loss.Contrast(a2, b2, reduce=False).sum().backward()
+   print(f"   grad reaches both inputs: a={float(a2.grad.abs().sum()) > 0}  b={float(b2.grad.abs().sum()) > 0}")
+   assert float(a2.grad.abs().sum()) > 0 and float(b2.grad.abs().sum()) > 0, "Contrast must grad both inputs"
+   return dict(ok=True)
+
+
 def RunAll():
    results = {}
    results["tau_baselines"] = TestTauBaselines()
@@ -134,6 +169,8 @@ def RunAll():
    results["exact_shapes"] = TestExactValueAndShapes()
    print()
    results["training"] = TestTrainingConverges()
+   print()
+   results["contrast"] = TestContrast()
    print("\nALL TESTS PASSED")
    return results
 

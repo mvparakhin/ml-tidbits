@@ -80,24 +80,54 @@ class C_RankingLoss:
       eq = (x.unsqueeze(-2) == x.unsqueeze(-1)).to(x.dtype)
       return gt + (eq.tril(-1).sum(-1) if ordinal else 0.5 * (eq.sum(-1) - 1.))
 
-   def __call__(self, scores: torch.Tensor, labels: torch.Tensor, hard: bool = False) -> torch.Tensor:
-      """Return ``1 - (gain/discount-weighted Kendall tau)``; ``hard=True`` counts 0/1 inversions instead of the surrogate."""
+   def _Surrogate(self, margin: torch.Tensor, sign: torch.Tensor, hard: bool) -> torch.Tensor:
+      """Pairwise surrogate of the signed margin: smooth sigmoid (soft) or 0/1 step (hard); a tied orientation is 0.5."""
+      eff = margin * sign
+      return torch.heaviside(-eff, eff.new_full((), 0.5)) if hard else torch.sigmoid(-self.rank_scale * eff)
+
+   def __call__(self, scores: torch.Tensor, labels: torch.Tensor, hard: bool = False, reduce: bool = True) -> torch.Tensor:
+      """Return ``1 - (gain/discount-weighted Kendall tau)``; ``hard=True`` counts 0/1 inversions instead of the surrogate.
+
+      Each unordered pair is taken once (upper triangle) and oriented by ``sign(label_i - label_j)``; a tied-label pair
+      is a neutral ``0.5`` that still counts for ``gain="none"`` (normalized by all pairs) but gets zero weight otherwise.
+      ``reduce=True`` (default) returns the scalar mean over groups; ``reduce=False`` returns the per-group value
+      (shape = the leading axes), one loss per independent group.
+      """
       margin = scores.unsqueeze(-1) - scores.unsqueeze(-2)
-      surrogate = torch.heaviside(-margin, margin.new_full((), 0.5)) if hard else torch.sigmoid(-self.rank_scale * margin)
       with torch.no_grad():
          labels = labels.to(scores.dtype)                                      # keep the detached weight math in scores.dtype
-         w = (labels.unsqueeze(-1) > labels.unsqueeze(-2)).to(scores.dtype)
-         if self.gain != "none":
+         sign = (labels.unsqueeze(-1) - labels.unsqueeze(-2)).sign()           # orientation; 0 for tied labels
+         if self.gain == "none":
+            w = torch.ones_like(margin)
+         else:
             if self.gain == "label":
                g = self.gain_base ** labels
             else:
                last = float(labels.shape[-1] - 1)
                g = self.gain_base ** ((last - self._Rank(labels, ordinal=False)) / max(last, 1.))
-            w = w * (g.unsqueeze(-1) - g.unsqueeze(-2)).abs()
+            w = (g.unsqueeze(-1) - g.unsqueeze(-2)).abs()                      # tied labels -> zero weight
          if self.discount:
             disc = 1. / torch.log2(self._Rank(scores, ordinal=True) + 2.)
             w = w * (disc.unsqueeze(-1) - disc.unsqueeze(-2)).abs()
+         w = w.triu(1)                                                         # count each unordered pair once
          den = w.sum(dim=(-2, -1))
-      per_group = 2. * (surrogate * w).sum(dim=(-2, -1)) / den.clamp_min(EpsForDtype(scores.dtype))
       valid = (den > 0).to(scores.dtype)
-      return (per_group * valid).sum() / valid.sum().clamp_min(1.)
+      per_group = valid * 2. * (self._Surrogate(margin, sign, hard) * w).sum(dim=(-2, -1)) / den.clamp_min(EpsForDtype(scores.dtype))
+      if not reduce:
+         return per_group
+      return per_group.sum() / valid.sum().clamp_min(1.)
+
+   def Contrast(self, a: torch.Tensor, b: torch.Tensor, hard: bool = False, reduce: bool = True) -> torch.Tensor:
+      """Symmetric rank-agreement contrast between two prediction vectors ``a`` and ``b`` (both differentiable).
+
+      The mean of ranking ``a`` by ``b``'s order and ``b`` by ``a``'s order, sharing the difference matrices. Uses
+      ``rank_scale`` only (no gain/discount); a tied pair is a neutral ``0.5``. ``reduce``/``hard`` behave as in ``__call__``.
+      """
+      ma = a.unsqueeze(-1) - a.unsqueeze(-2)
+      mb = b.unsqueeze(-1) - b.unsqueeze(-2)
+      with torch.no_grad():
+         sa, sb = ma.sign(), mb.sign()
+      n = ma.shape[-1]
+      pair = (self._Surrogate(ma, sb, hard) + self._Surrogate(mb, sa, hard)).triu(1)
+      per_group = pair.sum(dim=(-2, -1)) / max(0.5 * float(n * (n - 1)), 1.)
+      return per_group if not reduce else per_group.mean()
