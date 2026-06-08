@@ -302,7 +302,7 @@ The spectral path is a drop-in replacement for the pairwise kernel under a few c
 - `lambda_ang=0` (no separate angular-uniformity penalty; the spectral kernel already enforces it)
 - Embedding dimension `d ≥ 3`
 
-Under these settings, `spectral=True` gives the same loss surface (up to the truncation at `k_modes` radial modes) at significantly lower cost when N is large.
+Under these settings, `spectral=True` gives the same loss surface (up to truncating the spherical-harmonic series at degree l <= 1 and the radial series at `k_modes` modes) at significantly lower cost when N is large.
 
 ### Usage
 

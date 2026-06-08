@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import LRScheduler
 #   just_restarted        True if the last step() call moved into a new cycle
 #
 # Decay semantics: decay in [0,1), exponential peak decay per cycle, gamma = (1 - decay)
-# init_cycle=2*batches_in_epoch, cycle_mult_factor=1.5, decay=0.02
+# Suggested settings: t_0=2*batches_in_epoch, t_mult=1.5, decay=0.02
 #//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 class C_CosineAnnealingWarmRestartsDecay(torch.optim.lr_scheduler.LRScheduler):
    def __init__(self, optimizer, t_0, t_mult=2, eta_min=0, decay=0.1, last_epoch=-1, *, warmup_steps: int = 0, warmup_start_factor: float = 0.1):
@@ -79,10 +79,11 @@ class C_CosineAnnealingWarmRestartsDecay(torch.optim.lr_scheduler.LRScheduler):
       start_t = self.t_0 * ((self.t_mult ** float(cycle) - 1.) / (self.t_mult - 1.))
       t_cur = t - start_t
 
-      # Numerical safety around boundaries
+      # Numerical safety around boundaries (relative epsilon: an exact-integer boundary may
+      # evaluate epsilon below itself in float, which would delay the restart by a full step)
       if t_cur < 0.:
          t_cur = 0.
-      if t_cur >= t_i:
+      if t_cur >= t_i - 1e-9 * max(1., t_i):
          cycle += 1
          t_i = self.t_0 * (self.t_mult ** float(cycle))
          start_t = self.t_0 * ((self.t_mult ** float(cycle) - 1.) / (self.t_mult - 1.))
@@ -107,7 +108,9 @@ class C_CosineAnnealingWarmRestartsDecay(torch.optim.lr_scheduler.LRScheduler):
       self.t_cur = float(t_cur)
       self.next_restart_t = float(start_t + t_i)
 
-      next_restart_step = int(math.ceil(self.next_restart_t))
+      # Relative epsilon before ceil: an exact-integer boundary may evaluate epsilon above itself
+      # in float, which would push cycle_end_step one step late and is_cycle_end would never fire.
+      next_restart_step = int(math.ceil(self.next_restart_t - 1e-9 * max(1., self.next_restart_t)))
       cycle_end_step = next_restart_step - 1
       cur_step = int(math.floor(t))
       self.steps_to_cycle_end = int(cycle_end_step - cur_step)

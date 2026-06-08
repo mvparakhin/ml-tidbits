@@ -330,11 +330,11 @@ namespace ns_base {
          double operator()(double param_v) {
             // This utility requires modification of internal parameters, available only in Internal mode.
             if constexpr (P_Mode == smInternal) {
-               double saved = p_spline->Container()(N_MLRSParamType(group_id), param_id);
-               p_spline->Container()(N_MLRSParamType(group_id), param_id) = param_v;
+               double saved = p_spline->MutableContainer()(N_MLRSParamType(group_id), param_id);
+               p_spline->MutableContainer()(N_MLRSParamType(group_id), param_id) = param_v;
                p_spline->UpdateDerivedInfo();
                double res = inverse ? p_spline->CalcInv(in_val) : p_spline->Calc(in_val);
-               p_spline->Container()(N_MLRSParamType(group_id), param_id) = saved;
+               p_spline->MutableContainer()(N_MLRSParamType(group_id), param_id) = saved;
                p_spline->UpdateDerivedInfo();
                return res;
             }
@@ -373,9 +373,11 @@ namespace ns_base {
       };
 
    public:
-      // Internal mode constructor with size
-      explicit T_UnifiedMonotonicSpline(size_t n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) : 
-                                                      T_UnifiedMonotonicSpline(internal_tag{}, n, centered, direction, x_step, y_step) {}
+      // Internal mode constructor with size. Templated on the integral type so plain integer literals
+      // bind here exactly instead of being ambiguous with the (bool, int) constructor below.
+      template<class P_Int, std::enable_if_t<std::is_integral_v<P_Int> && !std::is_same_v<P_Int, bool>, int> = 0>
+      explicit T_UnifiedMonotonicSpline(P_Int n, bool centered = true, int direction = 1, t_val x_step = t_val(1.), t_val y_step = t_val(1.)) :
+                                                      T_UnifiedMonotonicSpline(internal_tag{}, size_t(n), centered, direction, x_step, y_step) {}
       // Both mode constructor
       explicit T_UnifiedMonotonicSpline(bool centered = true, int direction = 1) : T_UnifiedMonotonicSpline(external_tag{}, centered, direction) {}
       // External-only mode constructor
@@ -494,7 +496,7 @@ namespace ns_base {
             throw LRSplinesException(3, __FILE__, __LINE__, file_name + ": x_pos size must be even and >= 2.");
          size_t n = size_2n / 2;
 
-         ParamContainer().Init(n);
+         MutableParamContainer().Init(n);
          std::copy(temp_buffer.begin(), temp_buffer.end(), this->x_pos);
          read_line(temp_buffer, size_2n);
          std::copy(temp_buffer.begin(), temp_buffer.end(), this->x_neg);
@@ -717,9 +719,11 @@ namespace ns_base {
       }
       
    private:
-      auto& Container() noexcept { return *static_cast<t_base*>(this); }
+      // Named differently from the public const accessors: a private non-const overload would win
+      // overload resolution on non-const objects and make the public ones uncallable.
+      auto& MutableContainer() noexcept { return *static_cast<t_base*>(this); }
       template <ns_base::N_SplineMode I = P_Mode>
-      std::enable_if_t<I == ns_base::smInternal, t_params&> ParamContainer() noexcept { return *static_cast<t_params*>(this); }
+      std::enable_if_t<I == ns_base::smInternal, t_params&> MutableParamContainer() noexcept { return *static_cast<t_params*>(this); }
       
       /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////      
       // Helper function to apply scaling based on Implicit Function Theorem: dx/dP = - (dy/dP) / (dy/dx)
@@ -827,7 +831,7 @@ namespace ns_base {
             const t_val s = safe(a + b);
             // Optimization: Reuse inverse
             const t_val inv_s = t_val(1.) / s;
-            const t_val g = (y[j-1] * a + y[j] * b) * inv_s;
+            const t_val g = y[j-1] + b * inv_s * (y[j] - y[j-1]); //FMA form, consistent with ApplySpline
 
             const t_val adj_y_jm1 = a * inv_s;
             const t_val adj_y_j = b * inv_s;
@@ -1074,12 +1078,12 @@ namespace ns_base {
             size_t idx_pos = n + i;
             t_val w_pos = w[2*idx_pos];
             t_val w_pos_next = w[2*(idx_pos+1)];
-            w[2*(n+i) + 1] = (lambda_pos * w_pos * acc.derivs()[idx_pos] + (1 - lambda_pos) * w_pos_next * acc.derivs()[idx_pos+1]) *
+            w[2*(n+i) + 1] = (lambda_pos / w_pos + (1 - lambda_pos) / w_pos_next) * //W*D == 1/W identity
                (dx1_pos + acc.x_pos_exp()[2*i+1]) / std::max(acc.y_pos_exp()[i], eps);
 
             t_val w_neg = w[2*i];
             t_val w_neg_next = w[2*(i+1)];
-            w[2*i + 1] = (lambda_neg * w_neg * acc.derivs()[i] + (1 - lambda_neg) * w_neg_next * acc.derivs()[i+1]) *
+            w[2*i + 1] = (lambda_neg / w_neg + (1 - lambda_neg) / w_neg_next) * //W*D == 1/W identity
                (dx1_neg + acc.x_neg_exp()[2*i+1]) / std::max(acc.y_neg_exp()[i], eps);
 
             y[size_2n + 1 + 2*i] = ((1 - lambda_pos) * w_pos * y[2*(n+i)] + lambda_pos * w_pos_next * y[2*(n+i+1)]) /
@@ -1181,11 +1185,13 @@ namespace ns_base {
             return finalize(numerator / (denominator * denominator));
          }
 
-         // ctValue
+         // ctValue: FMA form, matching the Python implementation. Unlike the raw barycentric form
+         // (Y_k*v1 + Y_{k+1}*v2)/D, it stays inside the segment even when the denominator is eps-clamped.
+         t_val beta = v2 / denominator;
          if (inverse)
-            return finalize((x_k * v1 + x_k1 * v2) / denominator); // Inverse: x = (x_k*v1 + x_{k+1}*v2) / D
+            return finalize(x_k + beta * (x_k1 - x_k)); // Inverse: x = X_k + beta*(X_{k+1}-X_k)
          else
-            return finalize((y_k * v1 + y_k1 * v2) / denominator); // Forward: y = (y_k*v1 + y_{k+1}*v2) / D
+            return finalize(y_k + beta * (y_k1 - y_k)); // Forward: y = Y_k + beta*(Y_{k+1}-Y_k)
       }
    };
 

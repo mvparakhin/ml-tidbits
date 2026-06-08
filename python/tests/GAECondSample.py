@@ -145,7 +145,7 @@ class C_InpaintMNIST(nn.Module):
       self.proj_b = nn.Linear(d_b, feat)
       self.proj_t = nn.Linear(d_t, feat)
 
-      seed_ch, seed_hw = 128, 7  # seed feature map: 64 channels x 7x7
+      seed_ch, seed_hw = 128, 7  # seed feature map: 128 channels x 7x7
       self.fc = nn.Sequential(
          nn.Linear(2 * feat, seed_ch * seed_hw * seed_hw),
          nn.ReLU(inplace=True),

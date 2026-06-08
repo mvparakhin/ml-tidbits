@@ -45,7 +45,7 @@ def EpsForDtype(dtype: torch.dtype, large: bool = False) -> float:
    return math.sqrt(eps) if large else eps
 
 
-# ---- Spectral Neumann helpers (used by C_WristbandLoss) ----
+# ---- Spectral Neumann helpers (used by C_WristbandGaussianLoss) ----
 
 @dataclass(frozen=True)
 class SpectralNeumannCoefficients:
@@ -212,13 +212,16 @@ class C_EmbedAttentionModule(nn.Module):
             with torch.no_grad():
                self.v_in.mul_(s)
                self.v_out.mul_(s)
+      else: # unused, but keep state_dicts and parameter-wide reductions free of torch.empty garbage
+         nn.init.zeros_(self.v_in)
+         nn.init.zeros_(self.v_out)
 
       # Optional q transformation and head combination
       self.q_transform = q_transform if q_transform is not None else nn.Identity()
-      if n_of_heads > 1:
-         self.head_combine = head_combine if head_combine is not None else nn.Linear(hidden_dim * n_of_heads, out_dim)
+      if head_combine is not None:
+         self.head_combine = head_combine
       else:
-         self.head_combine = nn.Identity()
+         self.head_combine = nn.Linear(hidden_dim * n_of_heads, out_dim) if n_of_heads > 1 else nn.Identity()
 
    def forward(self, x):
       orig_shape = x.shape
@@ -672,7 +675,7 @@ class C_WristbandGaussianLoss:
    Example
    -------
    >>> loss_fn = C_WristbandGaussianLoss(calibration_shape=(256, 8))
-   >>> z = torch.randn(256, 8)
+   >>> z = torch.randn(256, 8, requires_grad=True)
    >>> lc = loss_fn(z)
    >>> lc.total.backward()
    >>> loss_fn_spec = C_WristbandGaussianLoss(

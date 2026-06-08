@@ -610,7 +610,7 @@ Shape rules:
 * `spline_weights.shape` must be either `(*B, W)` or `(B_flat, W)`.
 * `W` must be `8N+1` (centered) or `8N+3` (non-centered), \$N\ge 1\$.
 
-**Return shapes:** both elements of the tuple have the same shape as `input_data` when their respective computation is requested; otherwise the unused element is a zero-dimensional tensor.
+**Return shapes:** both elements of the tuple have the same shape as `input_data` when their respective computation is requested; otherwise the unused element is an empty tensor (`torch.zeros(0)`).
 
 **Parameter layout (Mode 2)** for a single vector of length `W`:
 
@@ -671,7 +671,7 @@ void Init(size_t n,
           T x0 = 0.0, T y0 = 0.0);
 ```
 
-The `x0` and `y0` parameters set the initial center offsets for non-centered splines. For centered splines these are stored but have no effect (the offset is always added to the knot grid; when zero it is a no-op).
+The `x0` and `y0` parameters set the initial center offsets. They are always added to the knot grid (a no-op when zero), so for centered splines leave them at their default of 0.
 
 **Mode 1 methods**
 

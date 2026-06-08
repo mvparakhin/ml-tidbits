@@ -17,7 +17,7 @@ C++ components are all tested on Windows and Mac, gcc, clang and Visual Studio 2
 | `TestRankingLoss.py` | Tests and a training example for `RankingLoss.py` · [source](python/tests/TestRankingLoss.py) |
 | `DeterministicGAE.py` | End-to-end example: **Deterministic Gaussian Autoencoder** built from the modules in `EmbedModels.py` · [source](python/tests/DeterministicGAE.py) |
 | `GAECondSample.py` | **Deterministic Conditional Sampling** on MNIST: trains a split-encoder GAE to inpaint missing image halves, demonstrating conditional generation by sampling from the learned Gaussian latent space · [docs](docs/gae_conditional_sampling.md) · [source](python/tests/GAECondSample.py) |
-| `CosineAnnealingWarmRestartsDecay.py` | `C_CosineAnnealingWarmRestartsDecay` — cosine annealing with warm restarts, fractional cycle growth, exponential peak decay, and linear warmup |
+| `Schedulers.py` | `C_CosineAnnealingWarmRestartsDecay` — cosine annealing with warm restarts, fractional cycle growth, exponential peak decay, and linear warmup |
 
 ---
 
@@ -72,7 +72,7 @@ with torch.inference_mode():
 
 > 📖 [Full documentation](docs/wristband.md) · 🧪 [GAE example](python/tests/DeterministicGAE.py) · 🧪 [Conditional sampling example](python/tests/GAECondSample.py)
 
-`EmbedModels.py` is a self-contained PyTorch module that provides everything needed to build a **Deterministic Gaussian Autoencoder** — an autoencoder whose latent space is pushed toward N(0,I) *without* the reparameterization trick, KL divergence, or any stochastic sampling. The file contains five components that compose together into a clean training pipeline: a learnable attention layer for encoding and decoding, a residual network backbone, an invertible normalizing flow for latent-space shaping, and a novel distribution-matching loss. See `DeterministicGAE.py` for a complete working example.
+`EmbedModels.py` is a self-contained PyTorch module that provides everything needed to build a **Deterministic Gaussian Autoencoder** — an autoencoder whose latent space is pushed toward N(0,I) *without* the reparameterization trick, KL divergence, or any stochastic sampling. The file contains four components that compose together into a clean training pipeline: a learnable attention layer for encoding and decoding, a residual network backbone, an invertible normalizing flow for latent-space shaping, and a novel distribution-matching loss. See `DeterministicGAE.py` for a complete working example.
 
 ### C_EmbedAttentionModule
 
@@ -105,7 +105,7 @@ output = out_proj(elu(res))
 
 **Why this matters:** The paper shows that this wiring pattern causes the network to automatically "push" information into earlier layers during training, making later layers progressively more compressible. In practice this means: networks can be pruned aggressively after training (30-80% compression with no accuracy loss in their experiments), they exhibit better noise robustness, and they mitigate catastrophic forgetting in continual learning. In `EmbedModels.py`, ACN is used as the conditioner inside affine coupling layers and as the head combiner for the attention module.
 
-### C_CosineAnnealingWarmRestartsDecay (`CosineAnnealingWarmRestartsDecay.py`)
+### C_CosineAnnealingWarmRestartsDecay (`Schedulers.py`)
 
 > A drop-in PyTorch LR scheduler that extends cosine annealing with warm restarts to support **fractional cycle multipliers**, **exponential peak decay**, and **linear warmup** — with O(1) closed-form cycle lookup and rich introspection state.
 
@@ -125,7 +125,7 @@ output = out_proj(elu(res))
 
 ```python
 import torch
-from CosineAnnealingWarmRestartsDecay import C_CosineAnnealingWarmRestartsDecay
+from schedulers.Schedulers import C_CosineAnnealingWarmRestartsDecay
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 

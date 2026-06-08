@@ -126,10 +126,10 @@ class UnifiedMonotonicSpline(nn.Module):
          # Calculate flattened batch dimension of input (B_flat)
          b_flat = input_data.numel() // input_data.shape[-1]
          
-         w = spline_weights.shape[-1]
-
          if spline_weights.ndim < 1:
             raise ValueError("Spline weights must be at least 1-dimensional.")
+
+         w = spline_weights.shape[-1]
 
          # Calculate flattened batch dimension of weights
          b_flat_weights = spline_weights.numel() // w

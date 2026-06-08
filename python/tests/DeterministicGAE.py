@@ -1,6 +1,6 @@
 """
-TestEmbedModels.py
-==============
+DeterministicGAE.py
+===================
 Deterministic Gaussian Autoencoder -- minimal training example.
 
 Generates strongly non-Gaussian synthetic data in 15-D, trains an autoencoder
@@ -8,7 +8,7 @@ whose latent space (8-D) is pushed toward N(0,I) by the Wristband Gaussian
 Loss, and prints diagnostics every epoch.
 
 Usage:
-    python TestEmbedModels.py
+    python DeterministicGAE.py
 """
 
 import torch

@@ -8,7 +8,6 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <cassert>
 #include <iomanip>
 #include <utility>
 
@@ -138,6 +137,14 @@ void AssertNear(t_test_val a, t_test_val b, const std::string& msg, bool relativ
    if ((!relative && std::abs(a - b) > tolerance) || (relative && std::abs(a - b) > tolerance * std::max(std::abs(a), std::abs(b)))) {
       std::cerr << "ASSERTION FAILED: " << msg << "\n"
                 << "  Value A: " << a << "\n  Value B: " << b << std::endl;
+      throw std::runtime_error("Test failed assertion.");
+   }
+}
+
+// Unlike assert(), this still fires in NDEBUG (Release) builds
+void AssertTrue(bool condition, const std::string& msg) {
+   if (!condition) {
+      std::cerr << "ASSERTION FAILED: " << msg << std::endl;
       throw std::runtime_error("Test failed assertion.");
    }
 }
@@ -277,11 +284,11 @@ void TestConsistency(const std::string& filename, int direction, bool is_centere
 
       // Check monotonicity
       if (direction == 1) {
-         assert(y_int >= prev_y);
-         assert(dy_dx_int >= 0.); // Increasing spline must have non-negative derivative
+         AssertTrue(y_int >= prev_y, "Monotonicity: increasing spline values");
+         AssertTrue(dy_dx_int >= 0., "Increasing spline must have non-negative derivative");
       } else {
-         assert(y_int <= prev_y);
-         assert(dy_dx_int <= 0.); // Decreasing spline must have non-positive derivative
+         AssertTrue(y_int <= prev_y, "Monotonicity: decreasing spline values");
+         AssertTrue(dy_dx_int <= 0., "Decreasing spline must have non-positive derivative");
       }
       prev_y = y_int;
 
@@ -318,34 +325,34 @@ void TestAPIFeatures() {
    
    // Check Calc
    try { spline_uninit.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized external access (Calc).");
+   AssertTrue(caught, "Failed to throw on uninitialized external access (Calc).");
 
    // Check CalcInv
    caught = false;
    try { spline_uninit.CalcInv(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized external access (CalcInv).");
+   AssertTrue(caught, "Failed to throw on uninitialized external access (CalcInv).");
 
    // Check CalcDeriv
    caught = false;
    try { spline_uninit.CalcDeriv(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized external access (CalcDeriv).");
+   AssertTrue(caught, "Failed to throw on uninitialized external access (CalcDeriv).");
 
    // Check CalcInvDeriv
    caught = false;
    try { spline_uninit.CalcInvDeriv(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized external access (CalcInvDeriv).");
+   AssertTrue(caught, "Failed to throw on uninitialized external access (CalcInvDeriv).");
 
 
    // 2. Uninitialized Error (Internal Mode)
    t_spline_internal spline_uninit_int;
    caught = false;
    try { spline_uninit_int.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized internal access (Calc).");
+   AssertTrue(caught, "Failed to throw on uninitialized internal access (Calc).");
 
    // Check CalcDeriv
    caught = false;
    try { spline_uninit_int.CalcDeriv(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Failed to throw on uninitialized internal access (CalcDeriv).");
+   AssertTrue(caught, "Failed to throw on uninitialized internal access (CalcDeriv).");
 
 
    // 3. Move Semantics (External Mode)
@@ -361,7 +368,7 @@ void TestAPIFeatures() {
    // Source must be invalid (empty cache)
    caught = false;
    try { src_ext.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Source external object not invalidated after move.");
+   AssertTrue(caught, "Source external object not invalidated after move.");
 
    // 4. Move Semantics (Internal Mode)
    t_spline_internal src_int;
@@ -376,7 +383,44 @@ void TestAPIFeatures() {
    // Source must be invalid
    caught = false;
    try { src_int.Calc(1.); } catch (const LRSplinesException& e) { if (e.code() == 1) caught = true; }
-   assert(caught && "Source internal object not invalidated after move.");
+   AssertTrue(caught, "Source internal object not invalidated after move.");
+
+   // 5. Size constructor with a plain integer literal (regression: was ambiguous with the (bool, int) ctor)
+   t_spline_internal spline_lit(3);
+   AssertTrue(spline_lit.IsCentered(), "Literal-size constructor defaults to centered.");
+
+   // 6. Public const accessors on a NON-const object (regression: private overloads used to shadow them)
+   const auto& cont_direct = spline_lit.Container();
+   AssertTrue(cont_direct.N() == 3, "Container() accessible on a non-const spline.");
+   const auto& params_direct = spline_lit.ParamContainer();
+   AssertTrue(params_direct.N() == 3, "ParamContainer() accessible on a non-const spline.");
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Regression: extreme derivatives force the eps clamp in ApplySpline's denominator.
+// The FMA evaluation form must keep each value inside its segment, so monotonicity survives.
+// (The old barycentric form (Y_k*v1 + Y_{k+1}*v2)/eps shrinks the value arbitrarily, breaking it.)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void TestClampedDenominatorMonotonicity() {
+   const t_test_val c_log2 = t_test_val(0.6931471805599453);
+   // n=1, x spacings of 1 (after the -log2 convention), y heights and derivatives of e^46:
+   // all rational weights ~1e-10, so every interior denominator hits the 1e-6 clamp.
+   std::vector<t_test_val> params = {
+      c_log2, c_log2,   // x_pos
+      c_log2, c_log2,   // x_neg
+      46.,              // y_pos
+      46.,              // y_neg
+      46., 46., 46.     // ln_d
+   };
+   t_spline_external sp(params.data(), params.size());
+
+   t_test_val prev = -std::numeric_limits<t_test_val>::infinity();
+   for (t_test_val v = -2.5; v <= 2.5; v += 0.125) {
+      t_test_val y = sp.Calc(v);
+      AssertTrue(std::isfinite(y), "Clamped-denominator value is finite.");
+      AssertTrue(y >= prev, "Clamped-denominator evaluation stays monotone.");
+      prev = y;
+   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -415,6 +459,9 @@ int TestLRSplines() {
 
    // Test specific API behaviors
    RunTest("API Features (Init Errors, Move Semantics)", TestAPIFeatures);
+
+   // Numerical edge case: eps-clamped denominators must not break monotonicity
+   RunTest("Clamped-Denominator Monotonicity (FMA form)", TestClampedDenominatorMonotonicity);
 
    std::cout << "\nAll tests passed successfully!" << std::endl;
    return 0;

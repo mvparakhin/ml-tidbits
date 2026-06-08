@@ -463,12 +463,33 @@ def TestTrainingGradients(device, n_nodes=5, centered=True, direction=1):
       print(f"Gradient flow to y_0: {has_y0_grad}")
       assert has_x0_grad and has_y0_grad, "No gradient for center parameters"
 
+#/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+def TestInputValidation(device):
+   """Mode 2 input validation raises descriptive ValueErrors (regression: 0-dim weights used to hit IndexError)."""
+   print("\n--- Testing Input Validation (Mode 2) ---")
+   model = UnifiedMonotonicSpline(n_of_nodes=None)
+
+   try:
+      model(torch.randn(2, 5, device=device), torch.tensor(1.0, device=device))
+      raise AssertionError("0-dim weights must raise ValueError")
+   except ValueError as e:
+      print(f"0-dim weights correctly rejected: {e}")
+
+   try:
+      model(torch.randn(2, 5, device=device), torch.randn(2, 10, device=device))
+      raise AssertionError("bad-size weights must raise ValueError")
+   except ValueError as e:
+      print(f"bad-size weights correctly rejected: {e}")
+
 ##################################################################################################################################################
-# Main 
+# Main
 ##################################################################################################################################################
 if __name__ == '__main__':
    device = torch.device("cpu")
    print("Running tests on CPU")
+
+   TestInputValidation(device)
    
    n_nodes = 3
    
@@ -478,15 +499,15 @@ if __name__ == '__main__':
    print("="*60)
    
    model_tanh = TrainSplineMode1(TanhTarget, "y = tanh(2x)", device, n_nodes=n_nodes, epochs=2000)
-   model_tanh.SaveSplineWeights("spline_tanh.txt")
+   if model_tanh: model_tanh.SaveSplineWeights("spline_tanh.txt")
    model_decreasing = TrainSplineMode1(DecreasingTarget, "y = -tanh(2x)", device, n_nodes=n_nodes, epochs=2000, direction='decreasing')
-   model_decreasing.SaveSplineWeights("spline_decreasing.txt")
+   if model_decreasing: model_decreasing.SaveSplineWeights("spline_decreasing.txt")
    model_non_centered = TrainSplineMode1(NonCenteredTarget, "y = (x-3)^3+5", device, n_nodes=n_nodes+1, epochs=4000, x_range=(-4, 7), centered=False)
-   model_non_centered.SaveSplineWeights("spline_non_centered.txt")
+   if model_non_centered: model_non_centered.SaveSplineWeights("spline_non_centered.txt")
    model_inverse = TrainSplineMode1(CubeTarget, "x = cbrt(y)", device, n_nodes=n_nodes, epochs=2000, x_range=(-2, 2), inverse=True)
-   model_inverse.SaveSplineWeights("spline_inverse.txt")
+   if model_inverse: model_inverse.SaveSplineWeights("spline_inverse.txt")
    model_inverse_decreasing = TrainSplineMode1(NegCubeTarget, "x = cbrt(-y)", device, n_nodes=n_nodes, epochs=2000, x_range=(-2, 2), inverse=True, direction=-1)
-   model_inverse_decreasing.SaveSplineWeights("spline_inverse_decreasing.txt")
+   if model_inverse_decreasing: model_inverse_decreasing.SaveSplineWeights("spline_inverse_decreasing.txt")
    
    models = [model_tanh, model_decreasing, model_non_centered, model_inverse, model_inverse_decreasing]
    # Corresponding X ranges used during training (relevant for derivative tests)

@@ -121,26 +121,26 @@ def TestWristbandSpectralApproximation(*,
       for seed in seeds:
          x = _MakeStructuredSpectralTestBatch(seed, n, d, device, dtype)
 
-         with torch.no_grad():
-            comp_exact = exact_rep._Compute(x)
-            comp_spec = spec_rep._Compute(x)
+         with torch.no_grad(): # _Compute returns a plain (rep, rad, ang, mom) tuple
+            rep_exact, _, _, _ = exact_rep._Compute(x)
+            rep_spec, _, _, _ = spec_rep._Compute(x)
 
-            comp_exact_full = exact_full._Compute(x)
-            comp_spec_full = spec_full._Compute(x)
+            _, rad_exact_full, _, mom_exact_full = exact_full._Compute(x)
+            _, rad_spec_full, _, mom_spec_full = spec_full._Compute(x)
 
-         assert torch.isfinite(comp_exact.rep).all()
-         assert torch.isfinite(comp_spec.rep).all()
-         assert torch.isfinite(comp_exact_full.rad).all()
-         assert torch.isfinite(comp_spec_full.rad).all()
-         assert torch.isfinite(comp_exact_full.mom).all()
-         assert torch.isfinite(comp_spec_full.mom).all()
+         assert torch.isfinite(rep_exact).all()
+         assert torch.isfinite(rep_spec).all()
+         assert torch.isfinite(rad_exact_full).all()
+         assert torch.isfinite(rad_spec_full).all()
+         assert torch.isfinite(mom_exact_full).all()
+         assert torch.isfinite(mom_spec_full).all()
 
-         rep_abs_all.append((comp_exact.rep - comp_spec.rep).abs().cpu())
-         rep_exact_all.append(comp_exact.rep.cpu())
-         rep_spec_all.append(comp_spec.rep.cpu())
+         rep_abs_all.append((rep_exact - rep_spec).abs().cpu())
+         rep_exact_all.append(rep_exact.cpu())
+         rep_spec_all.append(rep_spec.cpu())
 
-         rad_max = max(rad_max, float((comp_exact_full.rad - comp_spec_full.rad).abs().max()))
-         mom_max = max(mom_max, float((comp_exact_full.mom - comp_spec_full.mom).abs().max()))
+         rad_max = max(rad_max, float((rad_exact_full - rad_spec_full).abs().max()))
+         mom_max = max(mom_max, float((mom_exact_full - mom_spec_full).abs().max()))
 
          xa = x.clone().requires_grad_(True)
          xb = x.clone().requires_grad_(True)
